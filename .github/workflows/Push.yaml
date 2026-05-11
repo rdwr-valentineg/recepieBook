@@ -1,0 +1,102 @@
+name: Docker Publish
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+
+jobs:
+  # ── Tag logic (shared) ────────────────────────────────────────────────────
+  set-tags:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      version_tag: ${{ steps.vars.outputs.VERSION_TAG }}
+      is_main: ${{ steps.vars.outputs.IS_MAIN }}
+    steps:
+      - name: Set Docker tag(s)
+        id: vars
+        run: |
+          REF_NAME="${{ github.event.workflow_run.head_branch || github.event.workflow_run.head_tag }}"
+          SAFE_TAG=$(echo "$REF_NAME" | tr '[:upper:]' '[:lower:]' | tr '/' '-')
+          echo "VERSION_TAG=$SAFE_TAG" >> $GITHUB_OUTPUT
+          if [[ "$SAFE_TAG" == "main" ]]; then
+            echo "IS_MAIN=true" >> $GITHUB_OUTPUT
+          else
+            echo "IS_MAIN=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ── Backend image (big — only when backend or its Dockerfile changed) ─────
+  publish-backend:
+    needs: set-tags
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_UNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ secrets.DOCKER_UNAME }}/recipe-book-backend:${{ needs.set-tags.outputs.version_tag }}
+            ${{ needs.set-tags.outputs.is_main == 'true' && format('{0}/recipe-book-backend:latest', secrets.DOCKER_UNAME) || '' }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.repository.pushed_at }}
+            org.opencontainers.image.source=${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.set-tags.outputs.version_tag }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+  # ── Frontend image (tiny — fast even for arm64) ───────────────────────────
+  publish-frontend:
+    needs: set-tags
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_UNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.frontend
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ secrets.DOCKER_UNAME }}/recipe-book-frontend:${{ needs.set-tags.outputs.version_tag }}
+            ${{ needs.set-tags.outputs.is_main == 'true' && format('{0}/recipe-book-frontend:latest', secrets.DOCKER_UNAME) || '' }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.repository.pushed_at }}
+            org.opencontainers.image.source=${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.set-tags.outputs.version_tag }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
