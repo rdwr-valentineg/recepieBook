@@ -524,7 +524,7 @@ function Field({ label, hint, required, children }) {
 // ---------------------------------------------------------------------------
 
 function AddSheet({ categories, onClose, onExtracted, onSaveManual }) {
-  const [tab, setTab] = useState('url'); // url | manual
+  const [tab, setTab] = useState('url'); // url | file | manual
   return (
     <div className="fixed inset-0 bg-ink/60 backdrop-blur-sm z-40 flex items-stretch sm:items-center justify-center sm:p-4 fade-in">
       <div className="bg-cream w-full sm:max-w-2xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-screen sm:max-h-[92vh]">
@@ -538,8 +538,9 @@ function AddSheet({ categories, onClose, onExtracted, onSaveManual }) {
 
         <div className="flex border-b border-ink/10 px-4 gap-1 bg-cream sticky top-0">
           {[
-            { id: 'url',    label: 'מקישור', icon: <Sparkles size={15} /> },
-            { id: 'manual', label: 'ידני',   icon: <Edit2 size={15} /> },
+            { id: 'url',    label: 'מקישור',   icon: <Sparkles size={15} /> },
+            { id: 'file',   label: 'מקובץ/תמונה', icon: <FileText size={15} /> },
+            { id: 'manual', label: 'ידני',      icon: <Edit2 size={15} /> },
           ].map(t => (
             <button
               key={t.id}
@@ -554,11 +555,9 @@ function AddSheet({ categories, onClose, onExtracted, onSaveManual }) {
         </div>
 
         <div className="overflow-y-auto flex-1">
-          {tab === 'url' ? (
-            <UrlExtract onExtracted={onExtracted} />
-          ) : (
-            <ManualForm categories={categories} onSave={onSaveManual} />
-          )}
+          {tab === 'url'    && <UrlExtract onExtracted={onExtracted} />}
+          {tab === 'file'   && <FileExtract onExtracted={onExtracted} />}
+          {tab === 'manual' && <ManualForm categories={categories} onSave={onSaveManual} />}
         </div>
       </div>
     </div>
@@ -887,6 +886,172 @@ function ResultCard({ result, onPick }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FileExtract: upload PDF or image, run vision LLM extraction
+// ---------------------------------------------------------------------------
+
+function FileExtract({ onExtracted }) {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null); // data URL for image preview
+  const [providers, setProviders] = useState([]);
+  const [picked, setPicked] = useState(new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const dropRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    api.providers()
+      .then(r => {
+        setProviders(r.providers);
+        setPicked(new Set(r.providers.filter(p => p.enabled).map(p => p.id)));
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleFile = (f) => {
+    if (!f) return;
+    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowed.includes(f.type) && !f.name.toLowerCase().endsWith('.pdf')) {
+      setErr('יש להעלות PDF או תמונה (JPEG, PNG, WEBP)');
+      return;
+    }
+    setErr('');
+    setFile(f);
+    if (f.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = e => setPreview(e.target.result);
+      reader.readAsDataURL(f);
+    } else {
+      setPreview(null); // PDF — no preview, show icon
+    }
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    handleFile(e.dataTransfer.files?.[0]);
+  };
+
+  const run = async () => {
+    if (!file) { setErr('יש לבחור קובץ'); return; }
+    if (picked.size === 0) { setErr('יש לבחור לפחות ספק LLM אחד'); return; }
+    setErr('');
+    setBusy(true);
+    try {
+      const data = await api.extractFile(file, Array.from(picked));
+      onExtracted({
+        captureSessionId: data.capture?.session_id,
+        capture: data.capture,
+        sourceUrl: null,
+        sourceDomain: 'קובץ מקומי',
+        pageTitle: data.page_title,
+        results: data.results,
+      });
+    } catch (e) {
+      setErr(e.message || 'שגיאה');
+    }
+    setBusy(false);
+  };
+
+  const isPdf = file?.type === 'application/pdf' || file?.name?.toLowerCase().endsWith('.pdf');
+
+  if (busy) {
+    return (
+      <div className="p-10 text-center">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-terracotta/10 text-terracotta mb-5 pulse-soft">
+          <Sparkles size={28} />
+        </div>
+        <h3 className="font-display text-xl font-bold mb-2">מחלץ מתכון מהקובץ...</h3>
+        <p className="text-sm text-ink/60">שולח לבינה המלאכותית לניתוח</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-5 sm:p-7 space-y-5">
+      {/* Drop zone */}
+      <div
+        ref={dropRef}
+        onDrop={onDrop}
+        onDragOver={e => e.preventDefault()}
+        onClick={() => inputRef.current?.click()}
+        className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition ${
+          file ? 'border-terracotta/40 bg-terracotta/5' : 'border-ink/20 hover:border-ink/40 bg-white'
+        }`}
+      >
+        <input ref={inputRef} type="file" className="hidden"
+          accept=".pdf,image/jpeg,image/png,image/webp,image/gif"
+          onChange={e => handleFile(e.target.files?.[0])} />
+
+        {file ? (
+          <div className="flex items-center gap-4">
+            {preview ? (
+              <img src={preview} alt="preview" className="w-20 h-20 object-cover rounded-xl border border-ink/10 shrink-0" />
+            ) : (
+              <div className="w-20 h-20 rounded-xl bg-ink/[0.06] flex items-center justify-center shrink-0">
+                <FileText size={32} className="text-terracotta" />
+              </div>
+            )}
+            <div className="text-right flex-1 min-w-0">
+              <div className="font-medium text-sm truncate">{file.name}</div>
+              <div className="text-xs text-ink/55 mt-0.5">{(file.size / 1024).toFixed(0)} KB · {isPdf ? 'PDF' : 'תמונה'}</div>
+              <button
+                onClick={e => { e.stopPropagation(); setFile(null); setPreview(null); }}
+                className="text-xs text-terracotta hover:underline mt-1"
+              >
+                הסרה
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="text-4xl mb-2">📄</div>
+            <p className="font-medium text-sm">גרור לכאן PDF או תמונה</p>
+            <p className="text-xs text-ink/50 mt-1">או לחץ לבחירה · JPEG, PNG, WEBP, PDF</p>
+          </div>
+        )}
+      </div>
+
+      {/* Provider selection */}
+      <Field label="ספקי LLM לחילוץ" hint="ה-LLM יראה את הקובץ ישירות (vision)">
+        <div className="space-y-2">
+          {providers.filter(p => p.enabled).map(p => (
+            <label key={p.id} className="flex items-center gap-3 p-3 bg-white border border-ink/10 rounded-xl cursor-pointer hover:border-ink/25">
+              <input type="checkbox" checked={picked.has(p.id)}
+                onChange={() => setPicked(s => { const n = new Set(s); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
+                className="w-4 h-4 accent-terracotta" />
+              <div className="flex-1">
+                <div className="font-medium text-sm">{p.name}</div>
+                <div className="text-xs text-ink/50 font-mono">{p.model}</div>
+              </div>
+            </label>
+          ))}
+          {providers.every(p => !p.enabled) && (
+            <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              ⚠️ אין ספק LLM פעיל. הגדר API key ב-Secret של ה-k8s.
+            </div>
+          )}
+        </div>
+      </Field>
+
+      {err && (
+        <div className="flex items-start gap-2 text-sm text-red-900 bg-red-50 border border-red-200 rounded-lg p-3">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" /><span>{err}</span>
+        </div>
+      )}
+
+      <button
+        onClick={run}
+        disabled={!file || picked.size === 0}
+        className="w-full bg-terracotta hover:bg-terracotta-dark disabled:opacity-40 disabled:cursor-not-allowed text-white py-3 rounded-xl font-medium transition flex items-center justify-center gap-2"
+      >
+        <Sparkles size={18} />
+        חלץ מתכון מהקובץ
+      </button>
     </div>
   );
 }

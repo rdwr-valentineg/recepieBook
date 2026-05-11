@@ -1,8 +1,10 @@
-"""LLM providers for extracting structured recipe data from page text."""
+"""LLM providers for extracting structured recipe data from page text or images."""
 import asyncio
+import base64
 import json
 import time
 import re
+from typing import Optional
 
 import httpx
 
@@ -197,4 +199,127 @@ async def extract_with_providers(page_text: str, page_title: str, url: str,
                 provider=p, success=False, error="Unknown provider")))
         else:
             tasks.append(fn(page_text, page_title, url))
+    return await asyncio.gather(*tasks)
+
+# ---------------------------------------------------------------------------
+# Vision extraction (PDF pages / uploaded images)
+# ---------------------------------------------------------------------------
+
+VISION_PROMPT = """You are extracting a recipe from a photo or scanned document image. Read carefully — the text may be handwritten, printed, or photographed at an angle.
+
+Return ONLY valid JSON (no markdown fences, no commentary):
+{
+  "title": "recipe name in its original language",
+  "category": "ONE of: desserts, pastries, bread, meat, fish, salads, pasta, soups, stews, breakfast, drinks, other",
+  "ingredients": "one ingredient per line, prefixed with '• '. Keep exact quantities and units.",
+  "instructions": "numbered steps (1. 2. 3.) one per line. Keep all times and temperatures.",
+  "notes": "serving size, prep/cook time, dietary tags, tips. Empty string if none."
+}
+
+If a field is not visible in the image, use an empty string. Return only the JSON object."""
+
+
+async def extract_anthropic_vision(image_pages: list[bytes], filename: str) -> ProviderResult:
+    started = time.monotonic()
+    if not settings.anthropic_api_key:
+        return ProviderResult(provider="anthropic", success=False, error="API key not configured")
+    try:
+        content = []
+        for page_bytes in image_pages[:4]:  # max 4 pages to stay within context
+            b64 = base64.b64encode(page_bytes).decode()
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
+        content.append({"type": "text", "text": VISION_PROMPT})
+
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": settings.anthropic_api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": settings.anthropic_model,
+                    "max_tokens": 2500,
+                    "messages": [{"role": "user", "content": content}],
+                },
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        text = "".join(b.get("text", "") for b in payload.get("content", []) if b.get("type") == "text")
+        data = parse_json_loose(text)
+        elapsed = int((time.monotonic() - started) * 1000)
+        return ProviderResult(provider="anthropic", success=True,
+                              data=normalize_extracted(data), elapsed_ms=elapsed)
+    except httpx.HTTPStatusError as e:
+        body = e.response.text[:200] if e.response is not None else ""
+        return ProviderResult(provider="anthropic", success=False,
+                              error=f"HTTP {e.response.status_code}: {body}",
+                              elapsed_ms=int((time.monotonic() - started) * 1000))
+    except Exception as e:
+        return ProviderResult(provider="anthropic", success=False,
+                              error=f"{type(e).__name__}: {e}",
+                              elapsed_ms=int((time.monotonic() - started) * 1000))
+
+
+async def extract_openai_vision(image_pages: list[bytes], filename: str) -> ProviderResult:
+    started = time.monotonic()
+    if not settings.openai_api_key:
+        return ProviderResult(provider="openai", success=False, error="API key not configured")
+    try:
+        content = []
+        for page_bytes in image_pages[:4]:
+            b64 = base64.b64encode(page_bytes).decode()
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}})
+        content.append({"type": "text", "text": VISION_PROMPT})
+
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+            resp = await client.post(
+                f"{settings.openai_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.openai_model,
+                    "messages": [{"role": "user", "content": content}],
+                    "temperature": 0.2,
+                    # Note: response_format json_object is NOT used here because
+                    # vision + json_object mode isn't supported by all OpenAI models
+                },
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        text = payload["choices"][0]["message"]["content"]
+        data = parse_json_loose(text)
+        elapsed = int((time.monotonic() - started) * 1000)
+        return ProviderResult(provider="openai", success=True,
+                              data=normalize_extracted(data), elapsed_ms=elapsed)
+    except httpx.HTTPStatusError as e:
+        body = e.response.text[:200] if e.response is not None else ""
+        return ProviderResult(provider="openai", success=False,
+                              error=f"HTTP {e.response.status_code}: {body}",
+                              elapsed_ms=int((time.monotonic() - started) * 1000))
+    except Exception as e:
+        return ProviderResult(provider="openai", success=False,
+                              error=f"{type(e).__name__}: {e}",
+                              elapsed_ms=int((time.monotonic() - started) * 1000))
+
+
+VISION_PROVIDER_MAP = {
+    "anthropic": extract_anthropic_vision,
+    "openai": extract_openai_vision,
+}
+
+
+async def extract_with_providers_vision(image_pages: list[bytes], filename: str,
+                                        providers: list[str]) -> list[ProviderResult]:
+    tasks = []
+    for p in providers:
+        fn = VISION_PROVIDER_MAP.get(p)
+        if fn is None:
+            tasks.append(asyncio.sleep(0, result=ProviderResult(
+                provider=p, success=False, error="Unknown provider")))
+        else:
+            tasks.append(fn(image_pages, filename))
     return await asyncio.gather(*tasks)

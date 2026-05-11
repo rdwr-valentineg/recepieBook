@@ -47,7 +47,7 @@ from contextlib import asynccontextmanager
 from typing import Optional, List
 from fastapi import (
     FastAPI, Depends, HTTPException, Response, Cookie,
-    UploadFile, File
+    UploadFile, File, Form
 )
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -66,7 +66,7 @@ from capture import (
     cleanup_orphan_sessions, recipe_capture_dir, PlaywrightHolder
 )
 from scraper import clean_html_to_text, domain_of
-from llm import extract_with_providers, list_providers
+from llm import extract_with_providers, extract_with_providers_vision, list_providers
 from seed_data import seed_if_empty
 
 
@@ -443,6 +443,99 @@ async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
         url=req.url,
         source_domain=domain_of(req.url),
         page_title=page_title,
+        capture=capture_info,
+        results=results,
+    )
+
+
+@app.post("/api/extract/file", response_model=ExtractResponse)
+async def extract_from_file(
+    file: UploadFile = File(...),
+    providers: str = Form(default='["anthropic","openai"]'),
+    _: bool = Depends(require_auth),
+):
+    """Extract a recipe from an uploaded PDF or image using LLM vision."""
+    import json as _json
+
+    try:
+        providers_list = _json.loads(providers)
+    except Exception:
+        providers_list = ["anthropic", "openai"]
+
+    raw = await file.read()
+    filename = file.filename or "upload"
+    content_type = file.content_type or ""
+
+    # --- Determine file type and produce JPEG page(s) for vision -------------
+    image_pages: list[bytes] = []
+    session_pdf: bytes | None = None
+    session_img: bytes | None = None
+
+    if content_type == "application/pdf" or filename.lower().endswith(".pdf"):
+        try:
+            import fitz  # pymupdf
+            doc = fitz.open(stream=raw, filetype="pdf")
+            session_pdf = raw
+            for page in doc:
+                mat = fitz.Matrix(2.0, 2.0)  # 2× scale for legibility
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                jpg = pix.tobytes("jpeg", jpg_quality=85)
+                image_pages.append(jpg)
+                if not session_img:
+                    session_img = jpg  # first page as thumbnail
+                if len(image_pages) >= 4:
+                    break
+            doc.close()
+        except Exception as e:
+            raise HTTPException(422, f"PDF processing error: {e}")
+
+    elif content_type.startswith("image/") or any(
+        filename.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")
+    ):
+        # Normalise to JPEG via Pillow for consistent LLM input
+        from io import BytesIO
+        from PIL import Image as PilImage
+        img = PilImage.open(BytesIO(raw))
+        img.thumbnail((2400, 2400))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        jpg_bytes = buf.getvalue()
+        image_pages = [jpg_bytes]
+        session_img = jpg_bytes
+    else:
+        raise HTTPException(415, "סוג קובץ לא נתמך. יש להעלות PDF או תמונה (JPEG, PNG, WEBP).")
+
+    if not image_pages:
+        raise HTTPException(422, "לא ניתן לעבד את הקובץ — נסי קובץ אחר")
+
+    # --- Save to temp session so it can be promoted on recipe save -----------
+    session_id = f"s_{uuid.uuid4().hex}"
+    sess_dir = os.path.join(settings.data_dir, "sessions", session_id)
+    os.makedirs(sess_dir, exist_ok=True)
+    if session_pdf:
+        with open(os.path.join(sess_dir, "page.pdf"), "wb") as f:
+            f.write(session_pdf)
+    if session_img:
+        with open(os.path.join(sess_dir, "page.jpg"), "wb") as f:
+            f.write(session_img)
+
+    capture_info = CaptureInfo(
+        session_id=session_id,
+        has_pdf=bool(session_pdf),
+        has_screenshot=bool(session_img),
+        screenshot_url=f"/api/extract/session/{session_id}/screenshot" if session_img else None,
+        pdf_url=f"/api/extract/session/{session_id}/pdf" if session_pdf else None,
+    )
+
+    # --- Run vision LLM extraction ------------------------------------------
+    results = await extract_with_providers_vision(image_pages, filename, providers_list)
+
+    return ExtractResponse(
+        url=None,
+        source_domain="קובץ מקומי",
+        page_title=filename,
         capture=capture_info,
         results=results,
     )

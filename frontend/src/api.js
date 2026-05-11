@@ -67,6 +67,18 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ url, providers, capture: true }),
   }),
+  extractFile: async (file, providers) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('providers', JSON.stringify(providers));
+    const res = await fetch('/api/extract/file', { method: 'POST', credentials: 'include', body: fd });
+    if (!res.ok) {
+      let msg = `שגיאה (${res.status})`;
+      try { const j = await res.json(); if (j.detail) msg = j.detail; } catch (_) {}
+      throw new ApiError(msg, res.status);
+    }
+    return res.json();
+  },
 
   // share (public, no auth needed but sent with credentials anyway is harmless)
   shareGet: (token) => fetch(`/api/share/${token}`).then(r => {
