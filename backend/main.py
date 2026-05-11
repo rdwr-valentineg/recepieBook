@@ -60,7 +60,6 @@ from schemas import (
 )
 from auth import (
     require_auth, issue_session, clear_session, verify_password, is_authenticated,
-    COOKIE_NAME
 )
 from capture import (
     capture_url, save_session_capture, promote_session_to_recipe,
