@@ -717,11 +717,7 @@ function ReviewAndSave({ draft, categories, onCancel, onBack, onSave }) {
   const successes = draft.results.filter(r => r.success);
   const failures = draft.results.filter(r => !r.success);
 
-  // In fallback mode with exactly one success, skip the compare screen
-  const autoAdvance = draft.mode === 'fallback' && successes.length === 1 && failures.length > 0;
-  const [view, setView] = useState(
-    successes.length > 1 ? 'compare' : 'form'
-  );
+  const initial = useMemo(() => {
     const merge = {
       title: '', category: 'other', ingredients: '', instructions: '', notes: '',
     };
@@ -735,7 +731,10 @@ function ReviewAndSave({ draft, categories, onCancel, onBack, onSave }) {
     return merge;
   }, [draft]);
 
-  const [view, setView] = useState(successes.length > 1 ? 'compare' : 'form');
+  // In fallback mode with exactly one success, skip the compare screen
+  const [view, setView] = useState(
+    successes.length > 1 ? 'compare' : 'form'
+  );
   const [form, setForm] = useState({
     title: initial.title,
     category: initial.category,
