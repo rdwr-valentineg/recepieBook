@@ -70,7 +70,7 @@ class CaptureInfo(BaseModel):
 
 
 class ExtractResponse(BaseModel):
-    url: str
+    url: Optional[str] = None
     source_domain: str
     page_title: str = ""
     capture: Optional[CaptureInfo] = None
