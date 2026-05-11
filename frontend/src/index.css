@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  background: #FAF5EC;
+  color: #2A2118;
+  font-family: "Heebo", "Assistant", sans-serif;
+}
+
+.paper-bg {
+  background-color: #FAF5EC;
+  background-image:
+    radial-gradient(at 20% 10%, rgba(198, 93, 61, 0.04) 0px, transparent 50%),
+    radial-gradient(at 80% 90%, rgba(123, 138, 79, 0.04) 0px, transparent 50%);
+}
+
+.card-shadow {
+  box-shadow: 0 1px 2px rgba(42, 33, 24, 0.04), 0 4px 12px rgba(42, 33, 24, 0.06);
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+.card-shadow:hover {
+  box-shadow: 0 4px 8px rgba(42, 33, 24, 0.06), 0 12px 24px rgba(42, 33, 24, 0.1);
+}
+
+.scrollbar-thin::-webkit-scrollbar { height: 4px; width: 4px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(42, 33, 24, 0.2); border-radius: 9999px; }
+
+@media print {
+  .no-print { display: none !important; }
+  body, .paper-bg { background: white !important; }
+}
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.fade-in { animation: fadeIn 0.3s ease-out; }
+
+@keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+.slide-up { animation: slideUp 0.25s ease-out; }
+
+@keyframes pulse-soft { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
+.pulse-soft { animation: pulse-soft 1.6s ease-in-out infinite; }

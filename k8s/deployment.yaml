@@ -1,0 +1,127 @@
+# ── Backend ───────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recipe-book-backend
+  namespace: default
+  labels:
+    app: recipe-book-backend
+spec:
+  replicas: 1          # MUST stay 1 — Playwright browser is process-local
+  selector:
+    matchLabels:
+      app: recipe-book-backend
+  strategy:
+    type: Recreate     # RollingUpdate + ReadWriteOnce PVC = scheduling deadlock
+  template:
+    metadata:
+      labels:
+        app: recipe-book-backend
+    spec:
+      containers:
+        - name: backend
+          image: your-dockerhub-username/recipe-book-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: recipe-book-secret
+          env:
+            - name: DATA_DIR
+              value: /data
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1.5Gi"
+              cpu: "1000m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: recipe-book-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recipe-book-backend
+  namespace: default
+spec:
+  selector:
+    app: recipe-book-backend
+  ports:
+    - port: 80
+      targetPort: 8000
+  type: ClusterIP
+
+---
+# ── Frontend ──────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recipe-book-frontend
+  namespace: default
+  labels:
+    app: recipe-book-frontend
+spec:
+  replicas: 1          # Can be increased freely — it's stateless nginx
+  selector:
+    matchLabels:
+      app: recipe-book-frontend
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: recipe-book-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: your-dockerhub-username/recipe-book-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "20m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recipe-book-frontend
+  namespace: default
+spec:
+  selector:
+    app: recipe-book-frontend
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP

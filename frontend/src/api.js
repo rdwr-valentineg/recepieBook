@@ -1,0 +1,78 @@
+// Lightweight API client. The browser sends the auth cookie automatically.
+
+const BASE = ''; // same-origin
+
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function request(path, opts = {}) {
+  const res = await fetch(BASE + path, {
+    credentials: 'include',
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(opts.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    let msg = `שגיאה (${res.status})`;
+    try {
+      const j = await res.json();
+      if (j.detail) msg = j.detail;
+    } catch (_) {}
+    throw new ApiError(msg, res.status);
+  }
+  if (res.status === 204) return null;
+  const ct = res.headers.get('content-type') || '';
+  return ct.includes('application/json') ? res.json() : res.text();
+}
+
+export const api = {
+  // auth
+  authStatus: () => request('/api/auth/status'),
+  login: (password) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ password }) }),
+  logout: () => request('/api/auth/logout', { method: 'POST' }),
+
+  // categories + providers
+  categories: () => request('/api/categories'),
+  providers: () => request('/api/providers'),
+
+  // recipes
+  listRecipes: () => request('/api/recipes'),
+  getRecipe: (id) => request(`/api/recipes/${id}`),
+  createRecipe: (body) => request('/api/recipes', { method: 'POST', body: JSON.stringify(body) }),
+  updateRecipe: (id, body) => request(`/api/recipes/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteRecipe: (id) => request(`/api/recipes/${id}`, { method: 'DELETE' }),
+  uploadImage: async (id, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`/api/recipes/${id}/image`, { method: 'POST', credentials: 'include', body: fd });
+    if (!res.ok) {
+      let msg = `שגיאה (${res.status})`;
+      try { const j = await res.json(); if (j.detail) msg = j.detail; } catch (_) {}
+      throw new ApiError(msg, res.status);
+    }
+    return res.json();
+  },
+  recapture: (id) => request(`/api/recipes/${id}/recapture`, { method: 'POST' }),
+  createShare: (id) => request(`/api/recipes/${id}/share`, { method: 'POST' }),
+  revokeShare: (id) => request(`/api/recipes/${id}/share`, { method: 'DELETE' }),
+
+  // extraction
+  extract: (url, providers) => request('/api/extract', {
+    method: 'POST',
+    body: JSON.stringify({ url, providers, capture: true }),
+  }),
+
+  // share (public, no auth needed but sent with credentials anyway is harmless)
+  shareGet: (token) => fetch(`/api/share/${token}`).then(r => {
+    if (!r.ok) throw new ApiError('הקישור לא תקף או הוסר', r.status);
+    return r.json();
+  }),
+};
+
+export { ApiError };

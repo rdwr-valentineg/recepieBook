@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: recipes
+      MARIADB_USER: recipes
+      MARIADB_PASSWORD: recipes
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--su-mysql", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - recipe_data:/data
+    environment:
+      DATABASE_URL: mariadb+pymysql://recipes:recipes@db:3306/recipes
+      APP_PASSWORD: dev
+      SESSION_SECRET: dev-secret-not-for-production-at-least-32-chars
+      SECURE_COOKIES: "False"
+      SHARE_BASE_URL: http://localhost
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    # For local dev with hot reload, skip this container and run instead:
+    #   cd frontend && npm run dev   (Vite proxies /api → localhost:8000)
+
+volumes:
+  mariadb_data:
+  recipe_data:

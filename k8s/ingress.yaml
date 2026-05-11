@@ -1,0 +1,92 @@
+# Ingress routing:
+#   /* (and /share/*)         → frontend  (nginx serves SPA, handles /share/* client-side)
+#   /api/*                    → backend   (FastAPI)
+#
+# home.example.com → full app (LAN only — point your internal DNS here)
+# example.com      → /api/share/* + /share/* only (internet-facing share links)
+
+---
+# Internal: full app
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: recipe-book-internal
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  # tls:
+  #   - hosts: [home.example.com]
+  #     secretName: recipe-book-internal-tls
+  rules:
+    - host: home.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: recipe-book-backend
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: recipe-book-frontend
+                port:
+                  number: 80
+
+---
+# External: share routes only (login page never exposed to internet)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: recipe-book-external
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  # tls:
+  #   - hosts: [example.com]
+  #     secretName: recipe-book-external-tls
+  rules:
+    - host: example.com
+      http:
+        paths:
+          - path: /api/share
+            pathType: Prefix
+            backend:
+              service:
+                name: recipe-book-backend
+                port:
+                  number: 80
+          - path: /share
+            pathType: Prefix
+            backend:
+              service:
+                name: recipe-book-frontend
+                port:
+                  number: 80
+          - path: /assets
+            pathType: Prefix
+            backend:
+              service:
+                name: recipe-book-frontend
+                port:
+                  number: 80
+          - path: /
+            pathType: Exact
+            backend:
+              service:
+                name: recipe-book-frontend
+                port:
+                  number: 80
