@@ -1,4 +1,4 @@
-# Self-Hosted Recipe Book
+# מתכונים וטעימים — Self-Hosted Recipe Book
 
 A self-hosted family recipe book running on your home Kubernetes cluster.
 

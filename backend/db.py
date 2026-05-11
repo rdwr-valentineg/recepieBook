@@ -3,7 +3,7 @@ import os
 import secrets
 from datetime import datetime
 from sqlalchemy import (
-    create_engine, Column, String, Text, DateTime, Boolean, Index, func
+    create_engine, Column, String, Text, DateTime, func
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from contextlib import contextmanager

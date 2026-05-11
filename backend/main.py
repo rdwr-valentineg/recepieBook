@@ -36,15 +36,16 @@ Routes:
     GET  /api/share/{token}/screenshot
     GET  /api/share/{token}/image
 
-  SPA fallback:
-    GET /{path:path}                          serves index.html for non-API paths
+  Note: SPA routing is handled by the nginx frontend container.
+        This backend is a pure API server.
 """
 import asyncio
 import os
 import shutil
 import uuid
 from contextlib import asynccontextmanager
-from typing import Optional, Listfrom fastapi import (
+from typing import Optional, List
+from fastapi import (
     FastAPI, Depends, HTTPException, Response, Cookie,
     UploadFile, File
 )
