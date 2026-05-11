@@ -5,7 +5,7 @@ Each capture opens its own browser context (cookies, storage) for isolation.
 """
 import asyncio
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from playwright.async_api import async_playwright, Browser, Playwright, TimeoutError as PWTimeout

@@ -4,7 +4,6 @@ import base64
 import json
 import time
 import re
-from typing import Optional
 
 import httpx
 
