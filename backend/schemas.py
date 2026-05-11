@@ -41,8 +41,9 @@ class LoginRequest(BaseModel):
 
 class ExtractRequest(BaseModel):
     url: str
-    providers: List[str] = Field(default_factory=lambda: ["anthropic", "openai"])
-    capture: bool = True  # if False, only extract; don't make PDF/screenshot
+    providers: List[str] = Field(default_factory=lambda: ["gemini", "groq", "ollama", "openai", "anthropic"])
+    mode: str = "fallback"   # "fallback" = sequential, stop at first success | "parallel" = all at once
+    capture: bool = True
 
 
 class ExtractedRecipe(BaseModel):

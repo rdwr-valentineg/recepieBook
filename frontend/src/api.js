@@ -63,14 +63,15 @@ export const api = {
   revokeShare: (id) => request(`/api/recipes/${id}/share`, { method: 'DELETE' }),
 
   // extraction
-  extract: (url, providers) => request('/api/extract', {
+  extract: (url, providers, mode = 'fallback') => request('/api/extract', {
     method: 'POST',
-    body: JSON.stringify({ url, providers, capture: true }),
+    body: JSON.stringify({ url, providers, mode, capture: true }),
   }),
-  extractFile: async (file, providers) => {
+  extractFile: async (file, providers, mode = 'fallback') => {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('providers', JSON.stringify(providers));
+    fd.append('mode', mode);
     const res = await fetch('/api/extract/file', { method: 'POST', credentials: 'include', body: fd });
     if (!res.ok) {
       let msg = `שגיאה (${res.status})`;

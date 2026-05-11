@@ -23,11 +23,28 @@ class Settings(BaseSettings):
     share_base_url: str = "https://example.com"
     secure_cookies: bool = True  # set False for plain http during local dev
 
-    # LLM - Anthropic
+    # LLM - Anthropic (paid)
     anthropic_api_key: Optional[str] = None
     anthropic_model: str = "claude-haiku-4-5-20251001"
 
-    # LLM - OpenAI
+    # LLM - Google Gemini (free tier: 15 RPM, 1M tokens/day)
+    # Get key at: https://aistudio.google.com/apikey
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.0-flash"
+
+    # LLM - Groq (free tier, very fast)
+    # Get key at: https://console.groq.com
+    groq_api_key: Optional[str] = None
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_vision_model: str = "llama-3.2-11b-vision-preview"
+
+    # LLM - Ollama (self-hosted, completely free)
+    # Deploy alongside this app in k8s, e.g. http://ollama:11434/v1
+    ollama_base_url: Optional[str] = None   # set to enable
+    ollama_model: str = "gemma3:4b"          # text extraction
+    ollama_vision_model: str = "llava:7b"    # vision (PDF/image)
+
+    # LLM - OpenAI (paid)
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com/v1"

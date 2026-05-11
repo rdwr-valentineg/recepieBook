@@ -570,42 +570,35 @@ function AddSheet({ categories, onClose, onExtracted, onSaveManual }) {
 
 function UrlExtract({ onExtracted }) {
   const [url, setUrl] = useState('');
-  const [providers, setProviders] = useState([]); // [{id, name, enabled, model}]
+  const [providers, setProviders] = useState([]);
   const [picked, setPicked] = useState(new Set());
+  const [mode, setMode] = useState('fallback'); // fallback | parallel
   const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState('idle'); // idle | capturing | extracting
+  const [phase, setPhase] = useState('idle');
   const [err, setErr] = useState('');
 
   useEffect(() => {
     api.providers()
       .then(r => {
         setProviders(r.providers);
-        // Default-select all enabled providers
-        const en = new Set(r.providers.filter(p => p.enabled).map(p => p.id));
-        setPicked(en);
+        setPicked(new Set(r.providers.filter(p => p.enabled).map(p => p.id)));
       })
-      .catch(() => setProviders([]));
+      .catch(() => {});
   }, []);
 
   const togglePicked = (id) => {
-    setPicked(s => {
-      const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    setPicked(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   };
 
   const run = async () => {
     setErr('');
     if (!url.trim()) { setErr('נא להזין כתובת'); return; }
-    if (picked.size === 0) { setErr('נא לבחור לפחות ספק LLM אחד'); return; }
+    if (picked.size === 0) { setErr('יש לבחור לפחות ספק LLM אחד'); return; }
     setBusy(true);
     setPhase('capturing');
     try {
-      // The /extract endpoint does capture + extraction together
-      setTimeout(() => setPhase('extracting'), 4000); // visual hint that we're past capture
-      const data = await api.extract(url.trim(), Array.from(picked));
+      setTimeout(() => setPhase('extracting'), 4000);
+      const data = await api.extract(url.trim(), Array.from(picked), mode);
       onExtracted({
         captureSessionId: data.capture?.session_id,
         capture: data.capture,
@@ -613,6 +606,7 @@ function UrlExtract({ onExtracted }) {
         sourceDomain: data.source_domain,
         pageTitle: data.page_title,
         results: data.results,
+        mode,
       });
     } catch (e) {
       setErr(e.message || 'שגיאה');
@@ -634,44 +628,54 @@ function UrlExtract({ onExtracted }) {
           {phase === 'capturing' ? 'מצלם את הדף...' : 'מחלץ את המתכון...'}
         </h3>
         <p className="text-sm text-ink/60">
-          {phase === 'capturing'
-            ? 'פותח את הדף ושומר PDF + צילום מסך'
-            : 'שולח לספק/י LLM שבחרת'}
+          {phase === 'capturing' ? 'שומר PDF + צילום מסך' : mode === 'fallback' ? 'מנסה ספקים לפי סדר עדיפות' : 'שולח לכל הספקים במקביל'}
         </p>
-        <p className="text-xs text-ink/40 mt-4">בדרך כלל לוקח 5–20 שניות</p>
       </div>
     );
   }
 
   return (
     <div className="p-5 sm:p-7 space-y-5">
-      <Field label="קישור למתכון" required hint="האתר ייפתח בדפדפן פנימי, נשמר ל-PDF + צילום מסך, והתוכן יישלח ל-LLM לחילוץ">
-        <input
-          type="url"
-          dir="ltr"
-          value={url}
-          onChange={e => setUrl(e.target.value)}
+      <Field label="קישור למתכון" required>
+        <input type="url" dir="ltr" value={url} onChange={e => setUrl(e.target.value)}
           placeholder="https://example.com/recipe"
           className="w-full px-3 py-2.5 bg-white border border-ink/15 rounded-xl text-sm focus:outline-none focus:border-terracotta focus:ring-2 focus:ring-terracotta/15"
-          style={{ direction: url ? 'ltr' : 'rtl', textAlign: url ? 'left' : 'right' }}
-        />
+          style={{ direction: url ? 'ltr' : 'rtl', textAlign: url ? 'left' : 'right' }} />
       </Field>
 
-      <Field label="ספקי LLM לחילוץ" hint={picked.size > 1 ? `יורצו ${picked.size} ספקים במקביל. תקבלי השוואה.` : 'בחירת יותר מאחד תאפשר השוואה'}>
+      {/* Mode toggle */}
+      <div className="flex gap-2">
+        {[
+          { id: 'fallback', label: 'אוטומטי', hint: 'מנסה לפי סדר, עוצר בהצלחה הראשונה' },
+          { id: 'parallel', label: 'השוואה', hint: 'כולם במקביל, רואים את כל התוצאות' },
+        ].map(m => (
+          <button key={m.id} onClick={() => setMode(m.id)}
+            title={m.hint}
+            className={`flex-1 py-2 px-3 rounded-xl text-sm font-medium border transition ${
+              mode === m.id ? 'bg-ink text-cream border-ink' : 'bg-white border-ink/15 text-ink/70 hover:border-ink/30'
+            }`}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-ink/50 -mt-3">
+        {mode === 'fallback'
+          ? '🔄 אוטומטי — אם ספק אחד נגמר, עובר לבא בתור'
+          : '⚖️ השוואה — רואים את כל התשובות ובוחרים'}
+      </p>
+
+      <Field label={mode === 'fallback' ? 'ספקים לפי סדר עדיפות' : 'ספקים לחילוץ'}
+             hint={mode === 'fallback' ? 'מנסה מלמעלה למטה, עוצר בהצלחה ראשונה' : 'כולם יורצו במקביל'}>
         <div className="space-y-2">
           {enabledProviders.length === 0 && (
             <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3">
-              ⚠️ אין ספק LLM פעיל. הגדר/י <code className="font-mono text-xs">ANTHROPIC_API_KEY</code> או <code className="font-mono text-xs">OPENAI_API_KEY</code> ב-Secret של ה-k8s.
+              ⚠️ אין ספק מוגדר. הוסף לפחות GEMINI_API_KEY לסודות ה-k8s.
             </div>
           )}
           {enabledProviders.map(p => (
             <label key={p.id} className="flex items-center gap-3 p-3 bg-white border border-ink/10 rounded-xl cursor-pointer hover:border-ink/25">
-              <input
-                type="checkbox"
-                checked={picked.has(p.id)}
-                onChange={() => togglePicked(p.id)}
-                className="w-4 h-4 accent-terracotta"
-              />
+              <input type="checkbox" checked={picked.has(p.id)}
+                onChange={() => togglePicked(p.id)} className="w-4 h-4 accent-terracotta" />
               <div className="flex-1">
                 <div className="font-medium text-sm">{p.name}</div>
                 <div className="text-xs text-ink/50 font-mono">{p.model}</div>
@@ -679,11 +683,11 @@ function UrlExtract({ onExtracted }) {
             </label>
           ))}
           {disabledProviders.map(p => (
-            <div key={p.id} className="flex items-center gap-3 p-3 bg-ink/[0.03] rounded-xl opacity-60">
+            <div key={p.id} className="flex items-center gap-3 p-3 bg-ink/[0.03] rounded-xl opacity-50">
               <div className="w-4 h-4 rounded border border-ink/20" />
               <div className="flex-1">
                 <div className="font-medium text-sm">{p.name}</div>
-                <div className="text-xs text-ink/50">לא מוגדר API key</div>
+                <div className="text-xs text-ink/50">לא מוגדר</div>
               </div>
             </div>
           ))}
@@ -692,18 +696,14 @@ function UrlExtract({ onExtracted }) {
 
       {err && (
         <div className="flex items-start gap-2 text-sm text-red-900 bg-red-50 border border-red-200 rounded-lg p-3">
-          <AlertCircle size={16} className="mt-0.5 shrink-0" />
-          <span>{err}</span>
+          <AlertCircle size={16} className="mt-0.5 shrink-0" /><span>{err}</span>
         </div>
       )}
 
-      <button
-        onClick={run}
-        disabled={!url.trim() || picked.size === 0}
-        className="w-full bg-terracotta hover:bg-terracotta-dark disabled:opacity-40 disabled:cursor-not-allowed text-white py-3 rounded-xl font-medium transition flex items-center justify-center gap-2"
-      >
+      <button onClick={run} disabled={!url.trim() || picked.size === 0}
+        className="w-full bg-terracotta hover:bg-terracotta-dark disabled:opacity-40 text-white py-3 rounded-xl font-medium transition flex items-center justify-center gap-2">
         <Sparkles size={18} />
-        צלם וחלץ מתכון
+        {mode === 'fallback' ? 'חלץ מתכון' : 'חלץ והשווה'}
       </button>
     </div>
   );
@@ -717,8 +717,11 @@ function ReviewAndSave({ draft, categories, onCancel, onBack, onSave }) {
   const successes = draft.results.filter(r => r.success);
   const failures = draft.results.filter(r => !r.success);
 
-  // Initial form: longest non-empty field per result (a simple merge)
-  const initial = useMemo(() => {
+  // In fallback mode with exactly one success, skip the compare screen
+  const autoAdvance = draft.mode === 'fallback' && successes.length === 1 && failures.length > 0;
+  const [view, setView] = useState(
+    successes.length > 1 ? 'compare' : 'form'
+  );
     const merge = {
       title: '', category: 'other', ingredients: '', instructions: '', notes: '',
     };
@@ -911,9 +914,10 @@ function ResultCard({ result, onPick }) {
 
 function FileExtract({ onExtracted }) {
   const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null); // data URL for image preview
+  const [preview, setPreview] = useState(null);
   const [providers, setProviders] = useState([]);
   const [picked, setPicked] = useState(new Set());
+  const [mode, setMode] = useState('fallback');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const dropRef = useRef(null);
@@ -957,7 +961,7 @@ function FileExtract({ onExtracted }) {
     setErr('');
     setBusy(true);
     try {
-      const data = await api.extractFile(file, Array.from(picked));
+      const data = await api.extractFile(file, Array.from(picked), mode);
       onExtracted({
         captureSessionId: data.capture?.session_id,
         capture: data.capture,
@@ -965,6 +969,7 @@ function FileExtract({ onExtracted }) {
         sourceDomain: 'קובץ מקומי',
         pageTitle: data.page_title,
         results: data.results,
+        mode,
       });
     } catch (e) {
       setErr(e.message || 'שגיאה');
@@ -1031,8 +1036,23 @@ function FileExtract({ onExtracted }) {
         )}
       </div>
 
+      {/* Mode toggle */}
+      <div className="flex gap-2">
+        {[
+          { id: 'fallback', label: 'אוטומטי' },
+          { id: 'parallel', label: 'השוואה' },
+        ].map(m => (
+          <button key={m.id} onClick={() => setMode(m.id)}
+            className={`flex-1 py-2 px-3 rounded-xl text-sm font-medium border transition ${
+              mode === m.id ? 'bg-ink text-cream border-ink' : 'bg-white border-ink/15 text-ink/70 hover:border-ink/30'
+            }`}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+
       {/* Provider selection */}
-      <Field label="ספקי LLM לחילוץ" hint="ה-LLM יראה את הקובץ ישירות (vision)">
+      <Field label={mode === 'fallback' ? 'ספקים לפי סדר עדיפות' : 'ספקים לחילוץ'} hint="ה-LLM יראה את הקובץ ישירות (vision)">
         <div className="space-y-2">
           {providers.filter(p => p.enabled).map(p => (
             <label key={p.id} className="flex items-center gap-3 p-3 bg-white border border-ink/10 rounded-xl cursor-pointer hover:border-ink/25">

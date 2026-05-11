@@ -66,7 +66,11 @@ from capture import (
     cleanup_orphan_sessions, recipe_capture_dir, PlaywrightHolder
 )
 from scraper import clean_html_to_text, domain_of
-from llm import extract_with_providers, extract_with_providers_vision, list_providers
+from llm import (
+    extract_with_providers, extract_with_providers_vision,
+    extract_with_fallback, extract_with_fallback_vision,
+    list_providers,
+)
 from seed_data import seed_if_empty
 
 
@@ -436,8 +440,12 @@ async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
     if not page_text:
         raise HTTPException(422, "לא ניתן לחלץ תוכן מהדף")
 
-    # Run all selected providers in parallel
-    results = await extract_with_providers(page_text, page_title, req.url, req.providers)
+    # Run all selected providers in parallel or sequential fallback
+    use_fallback = req.mode == "fallback"
+    if use_fallback:
+        results = await extract_with_fallback(page_text, page_title, req.url, req.providers)
+    else:
+        results = await extract_with_providers(page_text, page_title, req.url, req.providers)
 
     return ExtractResponse(
         url=req.url,
@@ -451,7 +459,8 @@ async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
 @app.post("/api/extract/file", response_model=ExtractResponse)
 async def extract_from_file(
     file: UploadFile = File(...),
-    providers: str = Form(default='["anthropic","openai"]'),
+    providers: str = Form(default='["gemini","groq","ollama","openai","anthropic"]'),
+    mode: str = Form(default="fallback"),
     _: bool = Depends(require_auth),
 ):
     """Extract a recipe from an uploaded PDF or image using LLM (text or vision)."""
@@ -552,12 +561,20 @@ async def extract_from_file(
     clean_text = text_content.strip()
     use_vision = not clean_text or len(clean_text) < 300
 
-    logger.info("Extraction strategy: %s (text_len=%d)", "vision" if use_vision else "text", len(clean_text))
+    use_fallback = mode == "fallback"
+    logger.info("Extraction strategy: %s (text_len=%d, mode=%s)",
+                "vision" if use_vision else "text", len(clean_text), mode)
 
     if use_vision:
-        results = await extract_with_providers_vision(image_pages, filename, providers_list)
+        if use_fallback:
+            results = await extract_with_fallback_vision(image_pages, providers_list)
+        else:
+            results = await extract_with_providers_vision(image_pages, filename, providers_list)
     else:
-        results = await extract_with_providers(clean_text, filename, "", providers_list)
+        if use_fallback:
+            results = await extract_with_fallback(clean_text, filename, "", providers_list)
+        else:
+            results = await extract_with_providers(clean_text, filename, "", providers_list)
 
     # Log results for debugging
     for r in results:
