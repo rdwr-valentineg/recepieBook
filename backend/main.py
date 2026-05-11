@@ -454,8 +454,10 @@ async def extract_from_file(
     providers: str = Form(default='["anthropic","openai"]'),
     _: bool = Depends(require_auth),
 ):
-    """Extract a recipe from an uploaded PDF or image using LLM vision."""
+    """Extract a recipe from an uploaded PDF or image using LLM (text or vision)."""
     import json as _json
+    import logging
+    logger = logging.getLogger("extract_file")
 
     try:
         providers_list = _json.loads(providers)
@@ -465,52 +467,66 @@ async def extract_from_file(
     raw = await file.read()
     filename = file.filename or "upload"
     content_type = file.content_type or ""
+    logger.info("extract_from_file: filename=%s size=%d providers=%s", filename, len(raw), providers_list)
 
-    # --- Determine file type and produce JPEG page(s) for vision -------------
     image_pages: list[bytes] = []
+    text_content: str = ""
     session_pdf: bytes | None = None
     session_img: bytes | None = None
 
-    if content_type == "application/pdf" or filename.lower().endswith(".pdf"):
+    is_pdf = content_type == "application/pdf" or filename.lower().endswith(".pdf")
+
+    if is_pdf:
         try:
             import fitz  # pymupdf
             doc = fitz.open(stream=raw, filetype="pdf")
             session_pdf = raw
-            for page in doc:
-                mat = fitz.Matrix(2.0, 2.0)  # 2× scale for legibility
+
+            for page_num, page in enumerate(doc):
+                # Always extract text
+                text_content += page.get_text()
+                # Render page to JPEG at 3× scale for sharp vision input
+                mat = fitz.Matrix(3.0, 3.0)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
-                jpg = pix.tobytes("jpeg", jpg_quality=85)
+                jpg = pix.tobytes("jpeg", jpg_quality=90)
                 image_pages.append(jpg)
                 if not session_img:
-                    session_img = jpg  # first page as thumbnail
-                if len(image_pages) >= 4:
+                    session_img = jpg
+                if page_num >= 3:  # max 4 pages
                     break
             doc.close()
+            logger.info("PDF processed: %d pages, text_len=%d, img_pages=%d",
+                        len(image_pages), len(text_content.strip()), len(image_pages))
         except Exception as e:
-            raise HTTPException(422, f"PDF processing error: {e}")
+            logger.exception("PDF processing error")
+            raise HTTPException(422, f"שגיאה בעיבוד PDF: {e}")
 
     elif content_type.startswith("image/") or any(
         filename.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")
     ):
-        # Normalise to JPEG via Pillow for consistent LLM input
         from io import BytesIO
         from PIL import Image as PilImage
-        img = PilImage.open(BytesIO(raw))
-        img.thumbnail((2400, 2400))
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        buf = BytesIO()
-        img.save(buf, format="JPEG", quality=85, optimize=True)
-        jpg_bytes = buf.getvalue()
-        image_pages = [jpg_bytes]
-        session_img = jpg_bytes
+        try:
+            img = PilImage.open(BytesIO(raw))
+            img.thumbnail((2400, 2400))
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=90, optimize=True)
+            jpg_bytes = buf.getvalue()
+            image_pages = [jpg_bytes]
+            session_img = jpg_bytes
+            logger.info("Image processed: size=%dx%d", img.width, img.height)
+        except Exception as e:
+            logger.exception("Image processing error")
+            raise HTTPException(422, f"שגיאה בעיבוד תמונה: {e}")
     else:
         raise HTTPException(415, "סוג קובץ לא נתמך. יש להעלות PDF או תמונה (JPEG, PNG, WEBP).")
 
-    if not image_pages:
+    if not image_pages and not text_content:
         raise HTTPException(422, "לא ניתן לעבד את הקובץ — נסי קובץ אחר")
 
-    # --- Save to temp session so it can be promoted on recipe save -----------
+    # --- Save to temp session ------------------------------------------------
     session_id = f"s_{uuid.uuid4().hex}"
     sess_dir = os.path.join(settings.data_dir, "sessions", session_id)
     os.makedirs(sess_dir, exist_ok=True)
@@ -529,8 +545,26 @@ async def extract_from_file(
         pdf_url=f"/api/extract/session/{session_id}/pdf" if session_pdf else None,
     )
 
-    # --- Run vision LLM extraction ------------------------------------------
-    results = await extract_with_providers_vision(image_pages, filename, providers_list)
+    # --- Choose extraction strategy ------------------------------------------
+    # If the PDF has real embedded text (>300 chars), use text LLM — more
+    # reliable than vision for digital PDFs. For scanned/image-only PDFs,
+    # fall back to vision.
+    clean_text = text_content.strip()
+    use_vision = not clean_text or len(clean_text) < 300
+
+    logger.info("Extraction strategy: %s (text_len=%d)", "vision" if use_vision else "text", len(clean_text))
+
+    if use_vision:
+        results = await extract_with_providers_vision(image_pages, filename, providers_list)
+    else:
+        results = await extract_with_providers(clean_text, filename, "", providers_list)
+
+    # Log results for debugging
+    for r in results:
+        if r.success:
+            logger.info("Provider %s succeeded: title=%r", r.provider, r.data.title if r.data else None)
+        else:
+            logger.warning("Provider %s failed: %s", r.provider, r.error)
 
     return ExtractResponse(
         url=None,

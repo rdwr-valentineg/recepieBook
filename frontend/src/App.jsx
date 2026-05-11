@@ -847,45 +847,60 @@ function ReviewAndSave({ draft, categories, onCancel, onBack, onSave }) {
 
 function ResultCard({ result, onPick }) {
   const d = result.data || {};
+  const isEmpty = !d.title && !d.ingredients && !d.instructions;
   return (
-    <div className="bg-white rounded-2xl border border-ink/10 p-4 flex flex-col">
+    <div className={`bg-white rounded-2xl border p-4 flex flex-col ${isEmpty ? 'border-amber-200' : 'border-ink/10'}`}>
       <div className="flex items-center justify-between mb-3">
         <div>
           <div className="font-medium text-sm">{result.provider === 'anthropic' ? 'Claude (Anthropic)' : result.provider === 'openai' ? 'GPT (OpenAI)' : result.provider}</div>
           <div className="text-xs text-ink/50">{result.elapsed_ms}ms</div>
         </div>
-        <button
-          onClick={onPick}
-          className="text-xs bg-terracotta hover:bg-terracotta-dark text-white px-3 py-1.5 rounded-full transition flex items-center gap-1"
-        >
-          <Check size={12} />
-          השתמש בזה
-        </button>
-      </div>
-      <div className="space-y-2.5 text-sm flex-1">
-        <div>
-          <div className="text-[11px] text-ink/50 uppercase tracking-wide">כותרת</div>
-          <div className="font-medium">{d.title || <span className="text-ink/30">—</span>}</div>
-        </div>
-        <div>
-          <div className="text-[11px] text-ink/50 uppercase tracking-wide">קטגוריה</div>
-          <div>{d.category || <span className="text-ink/30">—</span>}</div>
-        </div>
-        <div>
-          <div className="text-[11px] text-ink/50 uppercase tracking-wide">רכיבים</div>
-          <pre className="whitespace-pre-wrap font-body text-[13px] leading-relaxed text-ink/85 max-h-32 overflow-y-auto">{d.ingredients || '—'}</pre>
-        </div>
-        <div>
-          <div className="text-[11px] text-ink/50 uppercase tracking-wide">הוראות</div>
-          <pre className="whitespace-pre-wrap font-body text-[13px] leading-relaxed text-ink/85 max-h-32 overflow-y-auto">{d.instructions || '—'}</pre>
-        </div>
-        {d.notes && (
-          <div>
-            <div className="text-[11px] text-ink/50 uppercase tracking-wide">הערות</div>
-            <div className="text-[13px] text-ink/80">{d.notes}</div>
-          </div>
+        {result.success && !isEmpty && (
+          <button onClick={onPick}
+            className="text-xs bg-terracotta hover:bg-terracotta-dark text-white px-3 py-1.5 rounded-full transition flex items-center gap-1">
+            <Check size={12} /> השתמש בזה
+          </button>
         )}
       </div>
+
+      {!result.success && (
+        <div className="text-sm text-red-800 bg-red-50 rounded-lg p-3">
+          ⚠️ {result.error}
+        </div>
+      )}
+
+      {result.success && isEmpty && (
+        <div className="text-sm text-amber-800 bg-amber-50 rounded-lg p-3">
+          הספק הצליח אך לא חילץ תוכן. ייתכן שהקובץ לא קריא מספיק או שהמודל לא זיהה מתכון.
+        </div>
+      )}
+
+      {result.success && !isEmpty && (
+        <div className="space-y-2.5 text-sm flex-1">
+          <div>
+            <div className="text-[11px] text-ink/50 uppercase tracking-wide">כותרת</div>
+            <div className="font-medium">{d.title || <span className="text-ink/30">—</span>}</div>
+          </div>
+          <div>
+            <div className="text-[11px] text-ink/50 uppercase tracking-wide">קטגוריה</div>
+            <div>{d.category || <span className="text-ink/30">—</span>}</div>
+          </div>
+          <div>
+            <div className="text-[11px] text-ink/50 uppercase tracking-wide">רכיבים</div>
+            <pre className="whitespace-pre-wrap font-body text-[13px] leading-relaxed text-ink/85 max-h-32 overflow-y-auto">{d.ingredients || '—'}</pre>
+          </div>
+          <div>
+            <div className="text-[11px] text-ink/50 uppercase tracking-wide">הוראות</div>
+            <pre className="whitespace-pre-wrap font-body text-[13px] leading-relaxed text-ink/85 max-h-32 overflow-y-auto">{d.instructions || '—'}</pre>
+          </div>
+          {d.notes && (
+            <div>
+              <div className="text-[11px] text-ink/50 uppercase tracking-wide">הערות</div>
+              <div className="text-[13px] text-ink/80">{d.notes}</div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
