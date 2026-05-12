@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     data_dir: str = "/data"
 
     # Database — connect to your existing MariaDB
-    # e.g. mariadb+pymysql://recipes:secret@mariadb.home:3306/recipes
     database_url: str = "mariadb+pymysql://recipes:recipes@localhost:3306/recipes"
 
     # Auth
@@ -18,41 +17,50 @@ class Settings(BaseSettings):
     session_max_age_days: int = 60
 
     # Hosts / share URLs
-    # SHARE_BASE_URL is what the user copies/sends in WhatsApp.
-    # When you share with someone outside the LAN, use the external hostname.
     share_base_url: str = "https://example.com"
-    secure_cookies: bool = True  # set False for plain http during local dev
+    secure_cookies: bool = True
 
-    # LLM - Anthropic (paid)
+    # ── Direct providers (tried first, in this order) ────────────────────────
+
+    # Anthropic Claude — https://console.anthropic.com
     anthropic_api_key: Optional[str] = None
     anthropic_model: str = "claude-haiku-4-5-20251001"
 
-    # LLM - Google Gemini (free tier: 15 RPM, 1M tokens/day)
-    # Get key at: https://aistudio.google.com/apikey
-    gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-2.0-flash"
-
-    # LLM - Groq (free tier, very fast)
-    # Get key at: https://console.groq.com
-    groq_api_key: Optional[str] = None
-    groq_model: str = "llama-3.3-70b-versatile"
-    groq_vision_model: str = "llama-3.2-11b-vision-preview"
-
-    # LLM - Ollama (self-hosted, completely free)
-    # Deploy alongside this app in k8s, e.g. http://ollama:11434/v1
-    ollama_base_url: Optional[str] = None   # set to enable
-    ollama_model: str = "gemma3:4b"          # text extraction
-    ollama_vision_model: str = "llava:7b"    # vision (PDF/image)
-
-    # LLM - OpenAI (paid)
+    # OpenAI GPT — https://platform.openai.com
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com/v1"
 
-    # Capture / scrape
+    # xAI Grok (free monthly credits) — https://console.x.ai
+    xai_api_key: Optional[str] = None
+    xai_model: str = "grok-3-mini"
+    xai_vision_model: str = "grok-2-vision-1212"
+
+    # Google Gemini (free tier) — https://aistudio.google.com/apikey
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.0-flash"
+
+    # Groq (fast inference, free tier) — https://console.groq.com
+    groq_api_key: Optional[str] = None
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_vision_model: str = "llama-3.2-11b-vision-preview"
+
+    # ── Fallback providers ───────────────────────────────────────────────────
+
+    # OpenRouter (catch-all, :free models need no credits) — https://openrouter.ai
+    openrouter_api_key: Optional[str] = None
+    openrouter_text_model: str = "meta-llama/llama-3.2-3b-instruct:free"
+    openrouter_vision_model: str = "meta-llama/llama-3.2-11b-vision-instruct:free"
+
+    # Ollama (local k3s, last resort, no internet needed) — http://ollama:11434/v1
+    ollama_base_url: Optional[str] = None
+    ollama_model: str = "qwen2.5:1.5b"
+    ollama_vision_model: str = "moondream"
+
+    # ── Timeouts ─────────────────────────────────────────────────────────────
     fetch_timeout_seconds: int = 30
     llm_timeout_seconds: int = 90
-    capture_timeout_seconds: int = 60
+    capture_timeout_seconds: int = 120
     max_image_size_mb: int = 8
 
     class Config:

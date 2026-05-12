@@ -41,7 +41,7 @@ class LoginRequest(BaseModel):
 
 class ExtractRequest(BaseModel):
     url: str
-    providers: List[str] = Field(default_factory=lambda: ["gemini", "groq", "ollama", "openai", "anthropic"])
+    providers: List[str] = Field(default_factory=lambda: ["anthropic", "openai", "xai", "gemini", "groq", "openrouter"])
     mode: str = "fallback"   # "fallback" = sequential, stop at first success | "parallel" = all at once
     capture: bool = True
 

@@ -117,50 +117,35 @@ class Provider:
 
 def _enabled_providers() -> list[Provider]:
     ps = []
+    # Direct providers — tried first
+    if settings.anthropic_api_key:
+        ps.append(Provider(id="anthropic", name="Claude (Anthropic)",
+            base_url="anthropic", api_key=settings.anthropic_api_key,
+            text_model=settings.anthropic_model, vision_model=settings.anthropic_model,
+            is_anthropic=True))
+    if settings.openai_api_key:
+        ps.append(Provider(id="openai", name="GPT (OpenAI)",
+            base_url=settings.openai_base_url, api_key=settings.openai_api_key,
+            text_model=settings.openai_model, vision_model=settings.openai_model))
+    if settings.xai_api_key:
+        ps.append(Provider(id="xai", name="Grok (xAI)",
+            base_url="https://api.x.ai/v1", api_key=settings.xai_api_key,
+            text_model=settings.xai_model, vision_model=settings.xai_vision_model))
     if settings.gemini_api_key:
-        ps.append(Provider(
-            id="gemini", name="Gemini Flash (Google)",
+        ps.append(Provider(id="gemini", name="Gemini (Google)",
             base_url="https://generativelanguage.googleapis.com/v1beta/openai",
             api_key=settings.gemini_api_key,
-            text_model=settings.gemini_model,
-            vision_model=settings.gemini_model,  # same model handles vision
-        ))
+            text_model=settings.gemini_model, vision_model=settings.gemini_model))
     if settings.groq_api_key:
-        ps.append(Provider(
-            id="groq", name="Groq (Llama)",
-            base_url="https://api.groq.com/openai/v1",
-            api_key=settings.groq_api_key,
-            text_model=settings.groq_model,
-            vision_model=settings.groq_vision_model,
-        ))
-    if settings.ollama_base_url:
-        ps.append(Provider(
-            id="ollama", name="Ollama (local)",
-            base_url=settings.ollama_base_url.rstrip("/"),
-            api_key="ollama",  # Ollama ignores the key but httpx needs a non-empty value
-            text_model=settings.ollama_model,
-            vision_model=settings.ollama_vision_model,
-        ))
-    if settings.openai_api_key:
-        ps.append(Provider(
-            id="openai", name="GPT (OpenAI)",
-            base_url=settings.openai_base_url,
-            api_key=settings.openai_api_key,
-            text_model=settings.openai_model,
-            vision_model=settings.openai_model,
-        ))
-    if settings.anthropic_api_key:
-        ps.append(Provider(
-            id="anthropic", name="Claude (Anthropic)",
-            base_url="anthropic",
-            api_key=settings.anthropic_api_key,
-            text_model=settings.anthropic_model,
-            vision_model=settings.anthropic_model,
-            is_anthropic=True,
-        ))
+        ps.append(Provider(id="groq", name="Groq",
+            base_url="https://api.groq.com/openai/v1", api_key=settings.groq_api_key,
+            text_model=settings.groq_model, vision_model=settings.groq_vision_model))
+    # Fallback providers
+    if settings.openrouter_api_key:
+        ps.append(Provider(id="openrouter", name="OpenRouter (fallback)",
+            base_url="https://openrouter.ai/api/v1", api_key=settings.openrouter_api_key,
+            text_model=settings.openrouter_text_model, vision_model=settings.openrouter_vision_model))
     return ps
-
-
 def _provider_by_id(pid: str) -> Provider | None:
     for p in _enabled_providers():
         if p.id == pid:
@@ -170,14 +155,14 @@ def _provider_by_id(pid: str) -> Provider | None:
 
 def list_providers() -> list[ProviderInfo]:
     all_defs = [
-        ("gemini",    "Gemini Flash (Google) — free",  settings.gemini_model,    bool(settings.gemini_api_key)),
-        ("groq",      "Groq (Llama) — free",           settings.groq_model,      bool(settings.groq_api_key)),
-        ("ollama",    "Ollama — self-hosted free",      settings.ollama_model,    bool(settings.ollama_base_url)),
-        ("openai",    "GPT (OpenAI) — paid",            settings.openai_model,    bool(settings.openai_api_key)),
-        ("anthropic", "Claude (Anthropic) — paid",      settings.anthropic_model, bool(settings.anthropic_api_key)),
+        ("anthropic",   "Claude (Anthropic)",        settings.anthropic_model,        bool(settings.anthropic_api_key)),
+        ("openai",      "GPT (OpenAI)",               settings.openai_model,           bool(settings.openai_api_key)),
+        ("xai",         "Grok (xAI)",                 settings.xai_model,              bool(settings.xai_api_key)),
+        ("gemini",      "Gemini (Google)",             settings.gemini_model,           bool(settings.gemini_api_key)),
+        ("groq",        "Groq",                        settings.groq_model,             bool(settings.groq_api_key)),
+        ("openrouter",  "OpenRouter — fallback",       settings.openrouter_text_model,  bool(settings.openrouter_api_key)),
     ]
     return [ProviderInfo(id=i, name=n, model=m, enabled=e) for i, n, m, e in all_defs]
-
 
 # ---------------------------------------------------------------------------
 # OpenAI-compatible extraction (text)
@@ -361,14 +346,23 @@ async def extract_with_providers_vision(images: list[bytes], _filename: str,
 
 async def extract_with_fallback(text: str, title: str, url: str,
                                 providers: list[str]) -> list[ProviderResult]:
-    """Try each provider in order. Return all results up to and including the
-    first success (so the caller can show which ones failed before the winner)."""
+    """Try each configured provider in order. Skip unconfigured ones silently.
+    Stop at first success."""
     results = []
     for pid in providers:
-        result = await _run_text(pid, text, title, url)
+        p = _provider_by_id(pid)
+        if p is None:
+            continue  # not configured — skip silently, don't add to results
+        if p.is_anthropic:
+            result = await _extract_anthropic_text(p, text, title, url)
+        else:
+            result = await _extract_compat_text(p, text, title, url)
         results.append(result)
         if result.success:
             break
+    if not results:
+        results.append(ProviderResult(provider="none", success=False,
+                                      error="אין ספק LLM מוגדר. הגדר OLLAMA_BASE_URL או OPENROUTER_API_KEY."))
     return results
 
 
@@ -376,8 +370,17 @@ async def extract_with_fallback_vision(images: list[bytes],
                                        providers: list[str]) -> list[ProviderResult]:
     results = []
     for pid in providers:
-        result = await _run_vision(pid, images)
+        p = _provider_by_id(pid)
+        if p is None:
+            continue
+        if p.is_anthropic:
+            result = await _extract_anthropic_vision(p, images)
+        else:
+            result = await _extract_compat_vision(p, images)
         results.append(result)
         if result.success:
             break
+    if not results:
+        results.append(ProviderResult(provider="none", success=False,
+                                      error="אין ספק LLM מוגדר. הגדר OLLAMA_BASE_URL או OPENROUTER_API_KEY."))
     return results
