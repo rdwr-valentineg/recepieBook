@@ -142,9 +142,19 @@ def _enabled_providers() -> list[Provider]:
             text_model=settings.groq_model, vision_model=settings.groq_vision_model))
     # Fallback providers
     if settings.openrouter_api_key:
-        ps.append(Provider(id="openrouter", name="OpenRouter (fallback)",
-            base_url="https://openrouter.ai/api/v1", api_key=settings.openrouter_api_key,
-            text_model=settings.openrouter_text_model, vision_model=settings.openrouter_vision_model))
+        text_models = [m.strip() for m in settings.openrouter_text_models.split(',') if m.strip()]
+        vision_models = [m.strip() for m in settings.openrouter_vision_models.split(',') if m.strip()]
+        for i, text_model in enumerate(text_models):
+            vision_model = vision_models[i % len(vision_models)] if vision_models else text_model
+            short = text_model.split('/')[-1].replace(':free', '')
+            ps.append(Provider(
+                id=f"openrouter_{i}",
+                name=f"OpenRouter · {short}",
+                base_url="https://openrouter.ai/api/v1",
+                api_key=settings.openrouter_api_key,
+                text_model=text_model,
+                vision_model=vision_model,
+            ))
     return ps
 def _provider_by_id(pid: str) -> Provider | None:
     for p in _enabled_providers():
@@ -160,7 +170,7 @@ def list_providers() -> list[ProviderInfo]:
         ("xai",         "Grok (xAI)",                 settings.xai_model,              bool(settings.xai_api_key)),
         ("gemini",      "Gemini (Google)",             settings.gemini_model,           bool(settings.gemini_api_key)),
         ("groq",        "Groq",                        settings.groq_model,             bool(settings.groq_api_key)),
-        ("openrouter",  "OpenRouter — fallback",       settings.openrouter_text_model,  bool(settings.openrouter_api_key)),
+        ("openrouter",  "OpenRouter — fallback (auto model)",  "multiple :free models",  bool(settings.openrouter_api_key)),
     ]
     return [ProviderInfo(id=i, name=n, model=m, enabled=e) for i, n, m, e in all_defs]
 
@@ -344,12 +354,26 @@ async def extract_with_providers_vision(images: list[bytes], _filename: str,
 # Fallback mode — sequential, stops at first success
 # ---------------------------------------------------------------------------
 
+def _expand_providers(providers: list[str]) -> list[str]:
+    """Expand the virtual 'openrouter' id into all configured openrouter_N providers."""
+    result = []
+    enabled_ids = {p.id for p in _enabled_providers()}
+    for pid in providers:
+        if pid == "openrouter":
+            or_ids = sorted(i for i in enabled_ids if i.startswith("openrouter_"))
+            result.extend(or_ids if or_ids else [])
+        else:
+            result.append(pid)
+    return result
+
+
 async def extract_with_fallback(text: str, title: str, url: str,
                                 providers: list[str]) -> list[ProviderResult]:
     """Try each configured provider in order. Skip unconfigured ones silently.
+    OpenRouter is automatically expanded into its per-model sub-providers.
     Stop at first success."""
     results = []
-    for pid in providers:
+    for pid in _expand_providers(providers):
         p = _provider_by_id(pid)
         if p is None:
             continue  # not configured — skip silently, don't add to results
@@ -369,7 +393,7 @@ async def extract_with_fallback(text: str, title: str, url: str,
 async def extract_with_fallback_vision(images: list[bytes],
                                        providers: list[str]) -> list[ProviderResult]:
     results = []
-    for pid in providers:
+    for pid in _expand_providers(providers):
         p = _provider_by_id(pid)
         if p is None:
             continue
