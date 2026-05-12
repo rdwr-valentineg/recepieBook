@@ -47,20 +47,13 @@ class Settings(BaseSettings):
 
     # ── Fallback providers ───────────────────────────────────────────────────
 
-    # OpenRouter (catch-all, :free models need no credits) — https://openrouter.ai
-    # Each model is tried in order; if one is rate-limited the next is used automatically.
+    # OpenRouter (catch-all fallback) — https://openrouter.ai
+    # "openrouter/free" is OpenRouter's own smart router: automatically picks
+    # whichever free model is available, including vision-capable ones.
+    # No hardcoded slugs that go stale.
     openrouter_api_key: Optional[str] = None
-    openrouter_text_models: str = (
-        "google/gemma-2-9b-it:free,"
-        "meta-llama/llama-3.2-3b-instruct:free,"
-        "mistralai/mistral-7b-instruct:free,"
-        "qwen/qwen-2-7b-instruct:free,"
-        "microsoft/phi-3-mini-128k-instruct:free"
-    )
-    openrouter_vision_models: str = (
-        "meta-llama/llama-3.2-11b-vision-instruct:free,"
-        "qwen/qwen2-vl-7b-instruct:free"
-    )
+    openrouter_text_models: str = "openrouter/free"
+    openrouter_vision_models: str = "openrouter/free"
 
     # Ollama (local k3s, last resort, no internet needed) — http://ollama:11434/v1
     ollama_base_url: Optional[str] = None
