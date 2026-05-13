@@ -193,7 +193,14 @@ async def _extract_compat_text(provider: Provider, text: str, title: str, url: s
                 },
             )
             resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"]
+        raw_resp = resp.json()
+        msg = raw_resp["choices"][0]["message"]
+        raw = msg.get("content") or msg.get("reasoning") or ""
+        if not raw.strip():
+            raise ValueError(
+                f"empty response from {provider.text_model} "
+                f"(finish_reason={raw_resp['choices'][0].get('finish_reason')})"
+            )
         return ProviderResult(provider=provider.id, success=True,
                               data=normalize(parse_json_loose(raw)),
                               elapsed_ms=int((time.monotonic() - started) * 1000))
@@ -232,7 +239,14 @@ async def _extract_compat_vision(provider: Provider, images: list[bytes]) -> Pro
                 },
             )
             resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"]
+        raw_resp = resp.json()
+        msg = raw_resp["choices"][0]["message"]
+        raw = msg.get("content") or msg.get("reasoning") or ""
+        if not raw.strip():
+            raise ValueError(
+                f"empty response from {provider.text_model} "
+                f"(finish_reason={raw_resp['choices'][0].get('finish_reason')})"
+            )
         return ProviderResult(provider=provider.id, success=True,
                               data=normalize(parse_json_loose(raw)),
                               elapsed_ms=int((time.monotonic() - started) * 1000))
@@ -408,3 +422,79 @@ async def extract_with_fallback_vision(images: list[bytes],
         results.append(ProviderResult(provider="none", success=False,
                                       error="אין ספק LLM מוגדר. הגדר OLLAMA_BASE_URL או OPENROUTER_API_KEY."))
     return results
+
+
+# ---------------------------------------------------------------------------
+# Hebrew cleanup pass — short second call to fix text quality
+# ---------------------------------------------------------------------------
+
+HEBREW_CLEANUP_PROMPT = """You received recipe data extracted from a Hebrew website. Fix ONLY text quality issues:
+- Garbled or broken Hebrew characters
+- Incomplete/cut-off sentences
+- Unnatural Hebrew phrasing from bad OCR or scraping
+- Mixed RTL/LTR encoding artifacts
+- Inconsistent number formatting (e.g. "1/2" vs "½")
+
+Rules:
+- Keep ALL field names exactly as-is
+- Do NOT add or remove ingredients/steps
+- Do NOT translate anything
+- If the text is already fine, return it unchanged
+- Return ONLY valid JSON, no markdown fences
+
+Input:
+{json}
+
+Return the corrected JSON:"""
+
+
+async def cleanup_hebrew(data: ExtractedRecipe, providers: list[str]) -> ExtractedRecipe:
+    """Run a quick second LLM pass to fix Hebrew text quality."""
+    import json as _json
+    payload = {
+        "title": data.title,
+        "category": data.category,
+        "ingredients": data.ingredients,
+        "instructions": data.instructions,
+        "notes": data.notes,
+    }
+    prompt = HEBREW_CLEANUP_PROMPT.format(json=_json.dumps(payload, ensure_ascii=False, indent=2))
+
+    # Try providers in fallback order — use only the first success
+    for pid in providers:
+        p = _provider_by_id(pid)
+        if p is None:
+            continue
+        try:
+            if p.is_anthropic:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={"x-api-key": p.api_key, "anthropic-version": "2023-06-01",
+                                 "content-type": "application/json"},
+                        json={"model": p.text_model, "max_tokens": 2000,
+                              "messages": [{"role": "user", "content": prompt}]},
+                    )
+                    resp.raise_for_status()
+                    payload_resp = resp.json()
+                    raw = "".join(b.get("text","") for b in payload_resp.get("content",[]) if b.get("type")=="text")
+            else:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        f"{p.base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {p.api_key}", "Content-Type": "application/json"},
+                        json={"model": p.text_model,
+                              "messages": [{"role": "user", "content": prompt}],
+                              "temperature": 0.1},
+                    )
+                    resp.raise_for_status()
+                    msg = resp.json()["choices"][0]["message"]
+                    raw = msg.get("content") or msg.get("reasoning") or ""
+
+            if raw.strip():
+                fixed = parse_json_loose(raw)
+                return normalize(fixed)
+        except Exception:
+            continue  # try next provider
+
+    return data  # return original if all providers fail

@@ -69,7 +69,7 @@ from scraper import clean_html_to_text, domain_of
 from llm import (
     extract_with_providers, extract_with_providers_vision,
     extract_with_fallback, extract_with_fallback_vision,
-    list_providers,
+    cleanup_hebrew, list_providers,
 )
 from seed_data import seed_if_empty
 
@@ -399,10 +399,127 @@ async def recapture(recipe_id: str, db: Session = Depends(get_db),
 
 
 # ---------------------------------------------------------------------------
+# DELETE CAPTURE — clear bad PDF/screenshot (CAPTCHA, login walls, etc.)
+# ---------------------------------------------------------------------------
+
+@app.delete("/api/recipes/{recipe_id}/capture")
+def delete_capture(recipe_id: str, db: Session = Depends(get_db),
+                   _: bool = Depends(require_auth)):
+    """Delete stored PDF and screenshot for a recipe (e.g. when they captured a CAPTCHA page).
+    The recipe itself and its structured fields are preserved."""
+    r = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not r:
+        raise HTTPException(404, "מתכון לא נמצא")
+    cap_dir = recipe_capture_dir(recipe_id)
+    if os.path.isdir(cap_dir):
+        shutil.rmtree(cap_dir, ignore_errors=True)
+    r.pdf_filename = None
+    r.screenshot_filename = None
+    r.captured_at = None
+    r.capture_source_url = None
+    db.commit()
+    db.refresh(r)
+    return r.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# BATCH EXTRACT — fill in empty recipes using their saved screenshots
+# ---------------------------------------------------------------------------
+
+@app.post("/api/recipes/batch-extract")
+async def batch_extract(
+    body: dict = {},
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_auth),
+):
+    """For every recipe that has a screenshot but empty structured fields,
+    run LLM vision extraction and update the recipe in place.
+    Returns immediately with a count; processing happens synchronously (one by one)."""
+    import logging
+    logger = logging.getLogger("batch_extract")
+
+    providers = body.get("providers", ["anthropic", "openai", "xai", "gemini", "groq", "openrouter", "ollama"])
+    mode = body.get("mode", "fallback")
+
+    # Find empty recipes that have a screenshot to work from
+    empty = db.query(Recipe).filter(
+        (Recipe.ingredients == "") | Recipe.ingredients.is_(None),
+        (Recipe.instructions == "") | Recipe.instructions.is_(None),
+        Recipe.screenshot_filename.isnot(None),
+    ).all()
+
+    results = {"total": len(empty), "updated": 0, "failed": 0, "details": []}
+
+    for recipe in empty:
+        screenshot_path = os.path.join(recipe_capture_dir(recipe.id), recipe.screenshot_filename)
+        if not os.path.isfile(screenshot_path):
+            results["failed"] += 1
+            results["details"].append({"id": recipe.id, "title": recipe.title, "status": "screenshot missing"})
+            continue
+
+        try:
+            with open(screenshot_path, "rb") as f:
+                img_bytes = f.read()
+
+            extraction_results = await extract_with_fallback_vision([img_bytes], providers)
+            extraction_results = await _apply_cleanup(extraction_results, providers)
+            success = next((r for r in extraction_results if r.success), None)
+
+            if success and success.data:
+                d = success.data
+                # Only update non-empty fields from extraction
+                if d.title and not recipe.title:
+                    recipe.title = d.title
+                if d.category and d.category != "other":
+                    recipe.category = d.category
+                if d.ingredients:
+                    recipe.ingredients = d.ingredients
+                if d.instructions:
+                    recipe.instructions = d.instructions
+                if d.notes and not recipe.notes:
+                    recipe.notes = d.notes
+                db.commit()
+                results["updated"] += 1
+                results["details"].append({"id": recipe.id, "title": recipe.title, "status": "updated", "provider": success.provider})
+                logger.info("batch_extract: updated %r via %s", recipe.title, success.provider)
+            else:
+                errors = "; ".join(r.error or "" for r in extraction_results if not r.success)
+                results["failed"] += 1
+                results["details"].append({"id": recipe.id, "title": recipe.title, "status": "extraction failed", "error": errors})
+                logger.warning("batch_extract: failed for %r: %s", recipe.title, errors)
+
+        except Exception as e:
+            db.rollback()
+            results["failed"] += 1
+            results["details"].append({"id": recipe.id, "title": recipe.title, "status": "error", "error": str(e)})
+            logger.exception("batch_extract: exception for %r", recipe.title)
+
+        # Small delay between recipes to avoid hammering LLM rate limits
+        await asyncio.sleep(1)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # EXTRACTION (the AI part — used only at add time)
 # ---------------------------------------------------------------------------
 
-@app.post("/api/extract", response_model=ExtractResponse)
+async def _apply_cleanup(results: list, providers: list[str]) -> list:
+    """If settings.hebrew_cleanup, run cleanup pass on the first successful result."""
+    if not settings.hebrew_cleanup:
+        return results
+    for i, r in enumerate(results):
+        if r.success and r.data:
+            import logging
+            logging.getLogger("llm").info("Running Hebrew cleanup pass via %s", providers)
+            cleaned = await cleanup_hebrew(r.data, providers)
+            from schemas import ProviderResult
+            results[i] = ProviderResult(
+                provider=r.provider, success=True,
+                data=cleaned, elapsed_ms=r.elapsed_ms,
+            )
+            break
+    return results
 async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
     # Always capture if requested. Even on partial failure we try to return what we have.
     capture_info: Optional[CaptureInfo] = None
@@ -446,6 +563,8 @@ async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
         results = await extract_with_fallback(page_text, page_title, req.url, req.providers)
     else:
         results = await extract_with_providers(page_text, page_title, req.url, req.providers)
+
+    results = await _apply_cleanup(results, req.providers)
 
     return ExtractResponse(
         url=req.url,
@@ -575,6 +694,8 @@ async def extract_from_file(
             results = await extract_with_fallback(clean_text, filename, "", providers_list)
         else:
             results = await extract_with_providers(clean_text, filename, "", providers_list)
+
+    results = await _apply_cleanup(results, providers_list)
 
     # Log results for debugging
     for r in results:

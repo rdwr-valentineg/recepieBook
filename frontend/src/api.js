@@ -59,6 +59,11 @@ export const api = {
     return res.json();
   },
   recapture: (id) => request(`/api/recipes/${id}/recapture`, { method: 'POST' }),
+  deleteCapture: (id) => request(`/api/recipes/${id}/capture`, { method: 'DELETE' }),
+  batchExtract: (providers, mode) => request('/api/recipes/batch-extract', {
+    method: 'POST',
+    body: JSON.stringify({ providers, mode }),
+  }),
   createShare: (id) => request(`/api/recipes/${id}/share`, { method: 'POST' }),
   revokeShare: (id) => request(`/api/recipes/${id}/share`, { method: 'DELETE' }),
 

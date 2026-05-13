@@ -52,15 +52,18 @@ class Settings(BaseSettings):
     # whichever free model is available, including vision-capable ones.
     # No hardcoded slugs that go stale.
     openrouter_api_key: Optional[str] = None
-    openrouter_text_models: str = "openrouter/free"
-    openrouter_vision_models: str = "openrouter/free"
+    # "openrouter/free" listed 3 times = 3 automatic retries.
+    # Each call picks a different random free model, so a retry often succeeds.
+    openrouter_text_models: str = "openrouter/free,openrouter/free,openrouter/free"
+    openrouter_vision_models: str = "openrouter/free,openrouter/free,openrouter/free"
 
     # Ollama (local k3s, last resort, no internet needed) — http://ollama:11434/v1
     ollama_base_url: Optional[str] = None
     ollama_model: str = "qwen2.5:1.5b"
     ollama_vision_model: str = "moondream"
 
-    # ── Timeouts ─────────────────────────────────────────────────────────────
+    # Post-extraction: run a second short LLM pass to fix Hebrew text quality
+    hebrew_cleanup: bool = True
     fetch_timeout_seconds: int = 30
     llm_timeout_seconds: int = 90
     capture_timeout_seconds: int = 120

@@ -189,6 +189,30 @@ function RecipeApp({ onLogout }) {
     })();
   }, []);
 
+  const emptyWithScreenshot = useMemo(() =>
+    recipes.filter(r => r.has_screenshot && !r.ingredients?.trim() && !r.instructions?.trim()),
+    [recipes]
+  );
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchResult, setBatchResult] = useState(null);
+
+  const runBatchExtract = async () => {
+    setBatchBusy(true);
+    setBatchResult(null);
+    try {
+      const res = await api.batchExtract(
+        ["anthropic","openai","xai","gemini","groq","openrouter"],
+        "fallback"
+      );
+      setBatchResult(res);
+      await refresh(); // reload recipes to show updated fields
+      showToast(`עודכנו ${res.updated} מתכונים ✓`);
+    } catch (e) {
+      showToast(`שגיאה: ${e.message}`);
+    }
+    setBatchBusy(false);
+  };
+
   const getCat = (id) => categories.find(c => c.id === id);
 
   const filtered = useMemo(() => {
@@ -321,6 +345,31 @@ function RecipeApp({ onLogout }) {
 
       {/* Main */}
       <main className="max-w-6xl mx-auto px-4 sm:px-6 pb-24">
+        {/* Empty-recipes banner */}
+        {!loading && emptyWithScreenshot.length > 0 && (
+          <div className="mt-4 mb-2 p-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-3 flex-wrap fade-in">
+            <div className="flex-1 min-w-0">
+              <span className="font-medium text-amber-900 text-sm">
+                {emptyWithScreenshot.length} מתכונים עם צילום מסך אבל ללא תוכן מובנה
+              </span>
+              {batchResult && (
+                <span className="text-xs text-amber-700 mr-2">
+                  — עודכנו {batchResult.updated} / {batchResult.total} ✓
+                  {batchResult.failed > 0 && `, נכשלו ${batchResult.failed}`}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={runBatchExtract}
+              disabled={batchBusy}
+              className="flex items-center gap-1.5 bg-amber-700 hover:bg-amber-800 disabled:opacity-50 text-white text-sm px-3 py-2 rounded-xl transition"
+            >
+              {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              {batchBusy ? 'מחלץ...' : 'מלא הכל עם LLM'}
+            </button>
+          </div>
+        )}
+
         {loading ? (
           <div className="flex items-center justify-center py-24">
             <Loader2 className="animate-spin text-terracotta" size={32} />
@@ -1270,7 +1319,16 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
     setShareMenu(false);
   };
 
-  const handleRecapture = async () => {
+  const handleDeleteCapture = async () => {
+    if (!confirm('למחוק את ה-PDF וצילום המסך? (המתכון עצמו נשמר)')) return;
+    try {
+      const updated = await api.deleteCapture(recipe.id);
+      onUpdate(updated);
+      showToast('הצילום נמחק');
+    } catch (e) {
+      showToast(`שגיאה: ${e.message}`);
+    }
+  };
     if (!recipe.url) { showToast('אין URL למתכון'); return; }
     setRecapturing(true);
     try {
@@ -1337,6 +1395,9 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
         {/* Tab strip */}
         <div className="flex border-b border-ink/10 px-4 gap-1 bg-cream no-print">
           <DetailTab id="structured" current={tab} onSelect={setTab} icon={<BookOpen size={14} />} label="מתכון" />
+          {recipe.url && (
+            <DetailTab id="inapp" current={tab} onSelect={setTab} icon={<ExternalLink size={14} />} label="אתר מקורי" />
+          )}
           {recipe.has_screenshot && (
             <DetailTab id="screenshot" current={tab} onSelect={setTab} icon={<Camera size={14} />} label="צילום מסך" />
           )}
@@ -1351,10 +1412,10 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
             </button>
           )}
           {(recipe.has_pdf || recipe.has_screenshot) && (
-            <button onClick={handleRecapture} disabled={recapturing}
-              className="me-auto flex items-center gap-1.5 px-3 py-3 text-sm text-ink/55 hover:text-ink transition disabled:opacity-50"
-              title="צילום מחדש של הדף">
-              {recapturing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            <button onClick={handleDeleteCapture}
+              className="me-auto flex items-center gap-1.5 px-3 py-3 text-xs text-ink/40 hover:text-red-500 transition"
+              title="מחק PDF / צילום מסך (אם התוכן שגוי — CAPTCHA, דף login וכו')">
+              <Trash2 size={12} /> מחק capture
             </button>
           )}
         </div>
@@ -1363,6 +1424,9 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
         <div className="overflow-y-auto flex-1">
           {tab === 'structured' && (
             <StructuredView recipe={recipe} category={category} />
+          )}
+          {tab === 'inapp' && recipe.url && (
+            <InAppBrowser url={recipe.url} />
           )}
           {tab === 'pdf' && recipe.pdf_url && (
             <div className="h-full bg-ink/5">
@@ -1411,6 +1475,48 @@ function ShareMenuItem({ onClick, icon, title, subtitle }) {
         {subtitle && <div className="text-xs text-ink/50">{subtitle}</div>}
       </div>
     </button>
+  );
+}
+
+function InAppBrowser({ url }) {
+  const [blocked, setBlocked] = useState(false);
+  const domain = url ? new URL(url).hostname.replace(/^www\./, '') : '';
+
+  return (
+    <div className="flex flex-col h-full min-h-[70vh]">
+      {/* Info bar */}
+      <div className="flex items-center gap-2 px-4 py-2 bg-ink/[0.04] border-b border-ink/10 text-xs text-ink/55 flex-wrap">
+        <span className="font-mono">{domain}</span>
+        <span>·</span>
+        <span>חלק מהאתרים חוסמים הצגה בתוך אפליקציה</span>
+        <a href={url} target="_blank" rel="noopener noreferrer"
+           className="text-terracotta hover:underline flex items-center gap-0.5 ms-auto">
+          <ExternalLink size={11} />
+          פתח בדפדפן
+        </a>
+      </div>
+
+      {blocked ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
+          <div className="text-4xl">🚫</div>
+          <p className="text-sm text-ink/70">האתר חוסם הצגה בתוך אפליקציות</p>
+          <a href={url} target="_blank" rel="noopener noreferrer"
+             className="inline-flex items-center gap-1.5 bg-terracotta hover:bg-terracotta-dark text-white px-4 py-2 rounded-xl text-sm transition">
+            <ExternalLink size={15} />
+            פתח ב-{domain}
+          </a>
+        </div>
+      ) : (
+        <iframe
+          src={url}
+          className="flex-1 w-full border-0 bg-white"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          referrerPolicy="no-referrer"
+          onError={() => setBlocked(true)}
+          title="מתכון מקורי"
+        />
+      )}
+    </div>
   );
 }
 
