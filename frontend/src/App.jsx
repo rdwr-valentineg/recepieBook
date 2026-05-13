@@ -1329,12 +1329,14 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
       showToast(`שגיאה: ${e.message}`);
     }
   };
+
+  const handleRecapture = async () => {
     if (!recipe.url) { showToast('אין URL למתכון'); return; }
     setRecapturing(true);
     try {
       const updated = await api.recapture(recipe.id);
       onUpdate(updated);
-      showToast('הdf וצילום המסך עודכנו ✓');
+      showToast('PDF וצילום המסך עודכנו ✓');
     } catch (e) {
       showToast(`שגיאה: ${e.message}`);
     }

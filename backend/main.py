@@ -438,8 +438,9 @@ async def batch_extract(
     import logging
     logger = logging.getLogger("batch_extract")
 
-    providers = body.get("providers", ["anthropic", "openai", "xai", "gemini", "groq", "openrouter", "ollama"])
+    providers = body.get("providers", ["anthropic", "openai", "xai", "gemini", "groq", "openrouter"])
     mode = body.get("mode", "fallback")
+    use_fallback = mode == "fallback"
 
     # Find empty recipes that have a screenshot to work from
     empty = db.query(Recipe).filter(
@@ -461,7 +462,10 @@ async def batch_extract(
             with open(screenshot_path, "rb") as f:
                 img_bytes = f.read()
 
-            extraction_results = await extract_with_fallback_vision([img_bytes], providers)
+            if use_fallback:
+                extraction_results = await extract_with_fallback_vision([img_bytes], providers)
+            else:
+                extraction_results = await extract_with_providers_vision([img_bytes], filename, providers)
             extraction_results = await _apply_cleanup(extraction_results, providers)
             success = next((r for r in extraction_results if r.success), None)
 
