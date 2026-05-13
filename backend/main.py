@@ -465,7 +465,7 @@ async def batch_extract(
             if use_fallback:
                 extraction_results = await extract_with_fallback_vision([img_bytes], providers)
             else:
-                extraction_results = await extract_with_providers_vision([img_bytes], filename, providers)
+                extraction_results = await extract_with_providers_vision([img_bytes], recipe.title, providers)
             extraction_results = await _apply_cleanup(extraction_results, providers)
             success = next((r for r in extraction_results if r.success), None)
 
