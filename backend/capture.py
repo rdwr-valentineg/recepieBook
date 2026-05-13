@@ -5,8 +5,6 @@ Each capture opens its own browser context (cookies, storage) for isolation.
 """
 import asyncio
 import os
-import shutil
-import uuid
 from dataclasses import dataclass
 from typing import Optional
 
