@@ -62,8 +62,9 @@ from auth import (
     require_auth, issue_session, clear_session, verify_password, is_authenticated,
 )
 from capture import (
-    capture_url, save_session_capture, promote_session_to_recipe,
-    cleanup_orphan_sessions, recipe_capture_dir, PlaywrightHolder
+    capture_url, capture_from_fetched_html, save_session_capture,
+    promote_session_to_recipe, cleanup_orphan_sessions,
+    recipe_capture_dir, PlaywrightHolder,
 )
 from scraper import clean_html_to_text, domain_of
 from llm import (
@@ -323,7 +324,74 @@ async def upload_image(
     return r.to_dict()
 
 
-@app.get("/api/images/{filename}")
+
+# ---------------------------------------------------------------------------
+# STEP IMAGES — multiple photos per recipe
+# ---------------------------------------------------------------------------
+
+@app.post("/api/recipes/{recipe_id}/step-images")
+async def add_step_image(
+    recipe_id: str,
+    file: UploadFile = File(...),
+    caption: str = Form(default=""),
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_auth),
+):
+    import json as _json
+    r = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not r:
+        raise HTTPException(404, "מתכון לא נמצא")
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(415, "סוג תמונה לא נתמך")
+
+    raw = await file.read()
+    if len(raw) > settings.max_image_size_mb * 1024 * 1024:
+        raise HTTPException(413, f"התמונה גדולה מ-{settings.max_image_size_mb}MB")
+
+    from io import BytesIO
+    from PIL import Image
+    img = Image.open(BytesIO(raw))
+    img.thumbnail((1600, 1600))
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    fname = f"{recipe_id}_step_{uuid.uuid4().hex[:6]}.jpg"
+    img.save(os.path.join(settings.data_dir, "images", fname), format="JPEG", quality=82)
+
+    steps = _json.loads(r.step_images or "[]")
+    steps.append({"filename": fname, "caption": caption})
+    r.step_images = _json.dumps(steps, ensure_ascii=False)
+    db.commit()
+    db.refresh(r)
+    return r.to_dict()
+
+
+@app.delete("/api/recipes/{recipe_id}/step-images/{index}")
+def delete_step_image(
+    recipe_id: str, index: int,
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_auth),
+):
+    import json as _json
+    r = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not r:
+        raise HTTPException(404, "מתכון לא נמצא")
+    steps = _json.loads(r.step_images or "[]")
+    if index < 0 or index >= len(steps):
+        raise HTTPException(404, "תמונה לא נמצאה")
+    removed = steps.pop(index)
+    # Delete file
+    path = os.path.join(settings.data_dir, "images", removed["filename"])
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    r.step_images = _json.dumps(steps, ensure_ascii=False)
+    db.commit()
+    db.refresh(r)
+    return r.to_dict()
+
+
+@app.get("/api/images/{filename}")  # already exists for main image; step images share same dir
 def serve_image(filename: str, _: bool = Depends(require_auth)):
     if "/" in filename or ".." in filename:
         raise HTTPException(400, "bad path")
@@ -368,17 +436,30 @@ def get_recipe_screenshot(recipe_id: str, db: Session = Depends(get_db),
 @app.post("/api/recipes/{recipe_id}/recapture")
 async def recapture(recipe_id: str, db: Session = Depends(get_db),
                     _: bool = Depends(require_auth)):
+    import logging
+    logger = logging.getLogger("recapture")
     r = db.query(Recipe).filter(Recipe.id == recipe_id).first()
     if not r:
         raise HTTPException(404, "מתכון לא נמצא")
     if not r.url:
         raise HTTPException(400, "אין URL למתכון - לא ניתן לבצע capture")
 
+    # Strategy 1: direct Playwright navigation (works for most sites)
     result = await capture_url(r.url)
-    if result.error:
-        raise HTTPException(502, f"capture נכשל: {result.error}")
 
-    # write to recipe dir
+    # Strategy 2: if direct navigation failed or produced thin content,
+    # try fetching HTML first then rendering offline — avoids CAPTCHA
+    if result.error or not result.screenshot_bytes:
+        logger.info("recapture: direct failed (%s), trying HTML-first approach", result.error)
+        result2 = await capture_from_fetched_html(r.url)
+        if not result2.error and result2.screenshot_bytes:
+            result = result2
+            logger.info("recapture: HTML-first approach succeeded")
+        else:
+            logger.warning("recapture: both methods failed. direct=%s html=%s",
+                           result.error, result2.error)
+            raise HTTPException(502, f"שתי שיטות capture נכשלו:\n1. {result.error}\n2. {result2.error}")
+
     d = recipe_capture_dir(recipe_id)
     os.makedirs(d, exist_ok=True)
     if result.pdf_bytes:
@@ -532,7 +613,12 @@ async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
 
     if req.capture:
         result = await capture_url(req.url)
-        if result.error:
+        # Fallback: if direct navigation failed or got CAPTCHA, try HTML-first
+        if result.error or not result.screenshot_bytes:
+            result2 = await capture_from_fetched_html(req.url)
+            if not result2.error and result2.screenshot_bytes:
+                result = result2
+        if result.error and not result.screenshot_bytes:
             raise HTTPException(502, f"שגיאת capture: {result.error}")
         # Clean HTML for LLM input
         page_title, page_text = clean_html_to_text(result.html)

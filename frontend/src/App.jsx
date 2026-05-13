@@ -587,9 +587,10 @@ function AddSheet({ categories, onClose, onExtracted, onSaveManual }) {
 
         <div className="flex border-b border-ink/10 px-4 gap-1 bg-cream sticky top-0">
           {[
-            { id: 'url',    label: 'מקישור',   icon: <Sparkles size={15} /> },
-            { id: 'file',   label: 'מקובץ/תמונה', icon: <FileText size={15} /> },
-            { id: 'manual', label: 'ידני',      icon: <Edit2 size={15} /> },
+            { id: 'url',    label: 'מקישור',      icon: <Sparkles size={15} /> },
+            { id: 'screen', label: 'מהמסך',        icon: <Camera size={15} /> },
+            { id: 'file',   label: 'מקובץ/תמונה',  icon: <FileText size={15} /> },
+            { id: 'manual', label: 'ידני',          icon: <Edit2 size={15} /> },
           ].map(t => (
             <button
               key={t.id}
@@ -605,6 +606,7 @@ function AddSheet({ categories, onClose, onExtracted, onSaveManual }) {
 
         <div className="overflow-y-auto flex-1">
           {tab === 'url'    && <UrlExtract onExtracted={onExtracted} />}
+          {tab === 'screen' && <ScreenCapture onExtracted={onExtracted} />}
           {tab === 'file'   && <FileExtract onExtracted={onExtracted} />}
           {tab === 'manual' && <ManualForm categories={categories} onSave={onSaveManual} />}
         </div>
@@ -951,6 +953,152 @@ function ResultCard({ result, onPick }) {
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ScreenCapture: getDisplayMedia → LLM vision OCR
+// ---------------------------------------------------------------------------
+
+function ScreenCapture({ onExtracted }) {
+  const [providers, setProviders] = useState([]);
+  const [picked, setPicked] = useState(new Set());
+  const [mode, setMode] = useState('fallback');
+  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [capturedFile, setCapturedFile] = useState(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    api.providers()
+      .then(r => { setProviders(r.providers); setPicked(new Set(r.providers.filter(p => p.enabled).map(p => p.id))); })
+      .catch(() => {});
+  }, []);
+
+  const capture = async () => {
+    setErr('');
+    try {
+      // Ask user to share their screen/tab
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser', frameRate: 1 },
+        audio: false,
+      });
+      // Grab a single frame via a hidden video element
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      await new Promise(r => { video.onloadedmetadata = r; });
+      await video.play();
+      await new Promise(r => setTimeout(r, 300)); // let frame settle
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+
+      // Stop sharing immediately
+      stream.getTracks().forEach(t => t.stop());
+      video.srcObject = null;
+
+      const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9));
+      const file = new File([blob], 'screen-capture.jpg', { type: 'image/jpeg' });
+
+      setPreview(canvas.toDataURL('image/jpeg', 0.5));
+      setCapturedFile(file);
+    } catch (e) {
+      if (e.name !== 'NotAllowedError') setErr(`שגיאה בצילום המסך: ${e.message}`);
+    }
+  };
+
+  const run = async () => {
+    if (!capturedFile) return;
+    if (picked.size === 0) { setErr('יש לבחור ספק LLM'); return; }
+    setBusy(true);
+    try {
+      const data = await api.extractFile(capturedFile, Array.from(picked), mode);
+      onExtracted({
+        captureSessionId: data.capture?.session_id,
+        capture: data.capture,
+        sourceUrl: null,
+        sourceDomain: 'צילום מסך',
+        pageTitle: 'מתכון מצולם',
+        results: data.results,
+        mode,
+      });
+    } catch (e) {
+      setErr(e.message);
+    }
+    setBusy(false);
+  };
+
+  if (busy) return (
+    <div className="p-10 text-center">
+      <div className="w-16 h-16 rounded-full bg-terracotta/10 text-terracotta mx-auto mb-5 flex items-center justify-center pulse-soft">
+        <Sparkles size={28} />
+      </div>
+      <h3 className="font-display text-xl font-bold mb-2">מנתח את הצילום...</h3>
+    </div>
+  );
+
+  return (
+    <div className="p-5 sm:p-7 space-y-5">
+      <div className="bg-ink/[0.04] rounded-2xl p-4 text-sm text-ink/70 space-y-1.5">
+        <p className="font-medium text-ink">איך זה עובד:</p>
+        <p>1. לחץ "צלם" — הדפדפן יבקש לשתף מסך/חלון/לשונית</p>
+        <p>2. בחר את הלשונית שמציגה את המתכון (iframe, PDF, כל דבר)</p>
+        <p>3. מיד אחרי הבחירה הצילום מתבצע ושיתוף המסך מסתיים</p>
+        <p>4. ה-LLM יקרא את הצילום ויחלץ את המתכון</p>
+      </div>
+
+      {preview ? (
+        <div className="relative">
+          <img src={preview} alt="צילום מסך" className="w-full rounded-xl border border-ink/10" />
+          <button onClick={() => { setPreview(null); setCapturedFile(null); }}
+            className="absolute top-2 left-2 bg-white/90 rounded-full p-1 hover:bg-white shadow">
+            <X size={14} />
+          </button>
+          <div className="mt-2 text-xs text-ink/50 text-center">צולם ✓ — לחץ "חלץ" לשליחה ל-LLM</div>
+        </div>
+      ) : (
+        <button onClick={capture}
+          className="w-full border-2 border-dashed border-ink/20 hover:border-terracotta rounded-2xl py-8 flex flex-col items-center gap-3 transition group">
+          <Camera size={32} className="text-ink/40 group-hover:text-terracotta transition" />
+          <span className="font-medium">לחץ לצילום המסך</span>
+          <span className="text-xs text-ink/50">הדפדפן יבקש הרשאה לשיתוף מסך</span>
+        </button>
+      )}
+
+      {capturedFile && (
+        <>
+          <div className="flex gap-2">
+            {[{ id: 'fallback', label: 'אוטומטי' }, { id: 'parallel', label: 'השוואה' }].map(m => (
+              <button key={m.id} onClick={() => setMode(m.id)}
+                className={`flex-1 py-2 px-3 rounded-xl text-sm font-medium border transition ${mode === m.id ? 'bg-ink text-cream border-ink' : 'bg-white border-ink/15 text-ink/70'}`}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <div className="space-y-2">
+            {providers.filter(p => p.enabled).map(p => (
+              <label key={p.id} className="flex items-center gap-3 p-3 bg-white border border-ink/10 rounded-xl cursor-pointer">
+                <input type="checkbox" checked={picked.has(p.id)}
+                  onChange={() => setPicked(s => { const n = new Set(s); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
+                  className="w-4 h-4 accent-terracotta" />
+                <div><div className="font-medium text-sm">{p.name}</div></div>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+
+      {err && <div className="text-sm text-red-900 bg-red-50 border border-red-200 rounded-lg p-3">{err}</div>}
+
+      {capturedFile && (
+        <button onClick={run} disabled={picked.size === 0}
+          className="w-full bg-terracotta hover:bg-terracotta-dark disabled:opacity-40 text-white py-3 rounded-xl font-medium transition flex items-center justify-center gap-2">
+          <Sparkles size={18} /> חלץ מתכון מהצילום
+        </button>
       )}
     </div>
   );
@@ -1425,7 +1573,7 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
         {/* Content */}
         <div className="overflow-y-auto flex-1">
           {tab === 'structured' && (
-            <StructuredView recipe={recipe} category={category} />
+            <StructuredView recipe={recipe} category={category} onUpdate={onUpdate} showToast={showToast} />
           )}
           {tab === 'inapp' && recipe.url && (
             <InAppBrowser url={recipe.url} onRecapture={handleRecapture} recapturing={recapturing} />
@@ -1557,7 +1705,34 @@ function SectionedText({ text, className = '' }) {
   );
 }
 
-function StructuredView({ recipe, category }) {
+function StructuredView({ recipe, category, onUpdate, showToast }) {
+  const stepImgRef = useRef(null);
+  const [uploadingStep, setUploadingStep] = useState(false);
+
+  const handleStepImageUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingStep(true);
+    try {
+      const updated = await api.addStepImage(recipe.id, file);
+      onUpdate?.(updated);
+      showToast?.('התמונה הוספה ✓');
+    } catch (err) {
+      showToast?.(`שגיאה: ${err.message}`);
+    }
+    setUploadingStep(false);
+    e.target.value = '';
+  };
+
+  const handleDeleteStep = async (index) => {
+    if (!confirm('למחוק את התמונה?')) return;
+    try {
+      const updated = await api.deleteStepImage(recipe.id, index);
+      onUpdate?.(updated);
+    } catch (err) {
+      showToast?.(`שגיאה: ${err.message}`);
+    }
+  };
   return (
     <div className="p-5 sm:p-8">
       {recipe.image_url && (
@@ -1619,6 +1794,50 @@ function StructuredView({ recipe, category }) {
               ? 'אפשר ללחוץ על "פתח מתכון מקורי" או לערוך ולמלא ידנית.'
               : 'אפשר לערוך ולמלא ידנית.'}
         </div>
+      )}
+
+      {/* Step images gallery */}
+      {((recipe.step_images && recipe.step_images.length > 0) || onUpdate) && (
+        <section className="mt-6 pt-6 border-t border-ink/10">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-display text-lg font-bold flex items-center gap-2">
+              <span className="text-terracotta">📸</span> תמונות
+            </h2>
+            {onUpdate && (
+              <>
+                <button onClick={() => stepImgRef.current?.click()}
+                  disabled={uploadingStep}
+                  className="flex items-center gap-1.5 text-sm text-terracotta hover:underline disabled:opacity-50">
+                  {uploadingStep ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+                  הוסף תמונה
+                </button>
+                <input ref={stepImgRef} type="file" accept="image/*" className="hidden" onChange={handleStepImageUpload} />
+              </>
+            )}
+          </div>
+          {recipe.step_images && recipe.step_images.length > 0 && (
+            <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin -mx-5 sm:-mx-8 px-5 sm:px-8">
+              {recipe.step_images.map((img, i) => (
+                <div key={i} className="relative shrink-0 w-48 sm:w-56">
+                  <img src={`/api/images/${img.filename}`} alt={img.caption || `תמונה ${i + 1}`}
+                    className="w-full aspect-[4/3] object-cover rounded-xl border border-ink/10" />
+                  {img.caption && (
+                    <div className="text-xs text-ink/70 mt-1 text-center truncate">{img.caption}</div>
+                  )}
+                  {onUpdate && (
+                    <button onClick={() => handleDeleteStep(i)}
+                      className="absolute top-1.5 left-1.5 bg-white/90 rounded-full p-1 hover:bg-red-50 hover:text-red-600 transition shadow-sm">
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {(!recipe.step_images || recipe.step_images.length === 0) && onUpdate && (
+            <p className="text-sm text-ink/50">לחץ "הוסף תמונה" להוספת תמונות שלבים, תמונת מנה מוכנה וכו'</p>
+          )}
+        </section>
       )}
     </div>
   );

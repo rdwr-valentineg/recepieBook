@@ -58,6 +58,15 @@ export const api = {
     }
     return res.json();
   },
+  addStepImage: async (id, file, caption = '') => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('caption', caption);
+    const res = await fetch(`/api/recipes/${id}/step-images`, { method: 'POST', credentials: 'include', body: fd });
+    if (!res.ok) { let msg = `שגיאה (${res.status})`; try { const j = await res.json(); if (j.detail) msg = j.detail; } catch (_) {} throw new ApiError(msg, res.status); }
+    return res.json();
+  },
+  deleteStepImage: (id, index) => request(`/api/recipes/${id}/step-images/${index}`, { method: 'DELETE' }),
   recapture: (id) => request(`/api/recipes/${id}/recapture`, { method: 'POST' }),
   deleteCapture: (id) => request(`/api/recipes/${id}/capture`, { method: 'DELETE' }),
   batchExtract: (providers, mode) => request('/api/recipes/batch-extract', {

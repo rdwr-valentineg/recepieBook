@@ -58,6 +58,8 @@ class Recipe(Base):
     date = Column(String(20), nullable=False,
                   default=lambda: datetime.utcnow().strftime("%Y-%m-%d"))
 
+    step_images = Column(Text, nullable=True, default="[]")  # JSON: [{filename, caption}]
+
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -78,6 +80,7 @@ class Recipe(Base):
             "pdf_url": f"/api/recipes/{self.id}/pdf" if self.pdf_filename else None,
             "screenshot_url": f"/api/recipes/{self.id}/screenshot" if self.screenshot_filename else None,
             "captured_at": self.captured_at.isoformat() if self.captured_at else None,
+            "step_images": __import__('json').loads(self.step_images or "[]"),
             "added_by": self.added_by or "",
             "share_token": self.share_token,
             "date": self.date,
@@ -89,6 +92,17 @@ class Recipe(Base):
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    # Add new columns that may not exist in older databases
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        for stmt in [
+            "ALTER TABLE recipes ADD COLUMN step_images TEXT DEFAULT '[]'",
+        ]:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception:
+                pass  # column already exists
 
 
 def get_db() -> Session:

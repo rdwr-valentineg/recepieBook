@@ -184,11 +184,84 @@ async def capture_url(url: str) -> CaptureResult:
             await ctx.close()
         except Exception:
             pass
+async def capture_from_fetched_html(url: str) -> CaptureResult:
+    """Fetch HTML with plain httpx first, then render with Playwright.
+
+    Avoids CAPTCHA because Playwright never navigates to the URL —
+    it just renders the HTML we already have. Works for server-rendered
+    recipe sites (mako, krutit, foody, etc.) where content is in the HTML.
+    """
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(
+            timeout=settings.fetch_timeout_seconds,
+            follow_redirects=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
+                "Referer": "https://www.google.com/",
+            },
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            html = resp.text
+            final_url = str(resp.url)
+    except Exception as e:
+        return CaptureResult(html="", pdf_bytes=None, screenshot_bytes=None,
+                              final_url=url, error=f"fetch failed: {e}")
+
+    browser = await PlaywrightHolder.get_browser()
+    ctx = await browser.new_context(
+        viewport={"width": 1280, "height": 1800},
+        locale="he-IL",
+    )
+    page = await ctx.new_page()
+    try:
+        await page.add_init_script(STEALTH_SCRIPT)
+        # Render the pre-fetched HTML — base_url makes relative links resolve correctly
+        try:
+            await page.set_content(html, base_url=final_url, wait_until="networkidle",
+                                    timeout=settings.capture_timeout_seconds * 1000)
+        except PWTimeout:
+            pass  # content may have loaded enough
+
+        # Scroll to trigger lazy-loaded images/content
+        await page.evaluate("""async () => {
+            const delay = ms => new Promise(r => setTimeout(r, ms));
+            const total = document.body.scrollHeight;
+            const step = Math.max(600, Math.floor(total / 6));
+            for (let y = 0; y < total; y += step) {
+                window.scrollTo(0, y);
+                await delay(150);
+            }
+            window.scrollTo(0, 0);
+            await delay(300);
+        }""")
+        await page.wait_for_timeout(400)
+
+        screenshot_bytes = await page.screenshot(full_page=True, type="jpeg", quality=85)
+        pdf_bytes = await page.pdf(
+            format="A4",
+            print_background=True,
+            margin={"top": "12mm", "bottom": "12mm", "left": "10mm", "right": "10mm"},
+        )
+        return CaptureResult(html=html, pdf_bytes=pdf_bytes,
+                              screenshot_bytes=screenshot_bytes, final_url=final_url)
+    except Exception as e:
+        return CaptureResult(html="", pdf_bytes=None, screenshot_bytes=None,
+                              final_url=url, error=f"render failed: {e}")
+    finally:
+        try:
+            await ctx.close()
+        except Exception:
+            pass
 
 
-# ---------------------------------------------------------------------------
-# Session storage helpers
-# ---------------------------------------------------------------------------
+
 
 def session_dir(session_id: str) -> str:
     return os.path.join(settings.data_dir, "sessions", session_id)
