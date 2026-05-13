@@ -5,6 +5,8 @@ Each capture opens its own browser context (cookies, storage) for isolation.
 """
 import asyncio
 import os
+import shutil
+import uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -38,6 +40,7 @@ class PlaywrightHolder:
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--no-sandbox",
+                        "--disable-features=IsolateOrigins,site-per-process",
                     ],
                 )
             return cls._browser
@@ -59,15 +62,27 @@ class PlaywrightHolder:
                 cls._pw = None
 
 
-# Common cookie-banner / GDPR / age-gate selectors we'll try to dismiss
+# Stealth: hide all common bot-detection signals
+STEALTH_SCRIPT = """() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['he-IL', 'he', 'en-US', 'en'] });
+    if (!window.chrome) window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {} };
+    const orig = window.navigator.permissions.query;
+    window.navigator.permissions.query = (p) =>
+        p.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : orig(p);
+}"""
+
+# Cookie-banner / GDPR selectors to dismiss
 DISMISS_SELECTORS = [
     'button:has-text("הסכמה")',
     'button:has-text("מקבל")',
     'button:has-text("אישור")',
-    'button:has-text("Accept")',
     'button:has-text("Accept all")',
+    'button:has-text("Accept")',
     'button:has-text("I agree")',
-    'button:has-text("Agree")',
     'button:has-text("Got it")',
     '[id*="accept" i]',
     '[class*="accept-all" i]',
@@ -75,8 +90,53 @@ DISMISS_SELECTORS = [
 ]
 
 
+async def _load_page(page, url: str) -> None:
+    """Load a page with networkidle fallback, stealth, cookie dismiss, and lazy-load scroll."""
+    # Inject stealth before page load
+    await page.add_init_script(STEALTH_SCRIPT)
+
+    try:
+        await page.goto(url, wait_until="networkidle",
+                        timeout=settings.capture_timeout_seconds * 1000)
+    except PWTimeout:
+        await page.wait_for_load_state("domcontentloaded")
+
+    # Dismiss cookie banners
+    for sel in DISMISS_SELECTORS:
+        try:
+            btn = page.locator(sel).first
+            if await btn.is_visible(timeout=500):
+                await btn.click(timeout=1500)
+                await page.wait_for_timeout(300)
+                break
+        except Exception:
+            pass
+
+    # Scroll through the page in steps to trigger lazy loading
+    await page.evaluate("""async () => {
+        const delay = ms => new Promise(r => setTimeout(r, ms));
+        const total = document.body.scrollHeight;
+        const step = Math.max(600, Math.floor(total / 6));
+        for (let y = 0; y < total; y += step) {
+            window.scrollTo(0, y);
+            await delay(200);
+        }
+        window.scrollTo(0, 0);
+        await delay(400);
+    }""")
+
+    # Final settle time
+    await page.wait_for_timeout(600)
+
+
 async def capture_url(url: str) -> CaptureResult:
-    """Open URL in chromium, return HTML + PDF bytes + screenshot bytes."""
+    """Open URL in chromium, return HTML + PDF bytes + screenshot bytes.
+
+    Strategy:
+      1. Try the URL as-is.
+      2. If content looks thin (< 500 chars after trafilatura), try appending /print
+         or ?print=1 as many recipe sites expose a clean print view.
+    """
     browser = await PlaywrightHolder.get_browser()
     ctx = await browser.new_context(
         viewport={"width": 1280, "height": 1800},
@@ -87,52 +147,40 @@ async def capture_url(url: str) -> CaptureResult:
         ),
     )
     page = await ctx.new_page()
-    error: Optional[str] = None
     try:
-        try:
-            await page.goto(url, wait_until="networkidle",
-                            timeout=settings.capture_timeout_seconds * 1000)
-        except PWTimeout:
-            # Some sites never go fully idle (long-polling, analytics). Fall back to DOM ready.
-            await page.wait_for_load_state("domcontentloaded")
-
-        # Best-effort dismissal of cookie banners (quick, ignore failures)
-        for sel in DISMISS_SELECTORS:
-            try:
-                btn = page.locator(sel).first
-                if await btn.is_visible(timeout=500):
-                    await btn.click(timeout=1500)
-                    await page.wait_for_timeout(200)
-                    break
-            except Exception:
-                pass
-
-        # Let any post-click reflows settle
-        await page.wait_for_timeout(500)
+        await _load_page(page, url)
 
         final_url = page.url
         html = await page.content()
 
-        # Screenshot full page as JPEG (smaller than PNG, plenty good for archival)
-        screenshot_bytes = await page.screenshot(full_page=True, type="jpeg", quality=82)
+        # Quick content-length check: if very thin, try print view
+        from scraper import clean_html_to_text
+        _, text_preview = clean_html_to_text(html)
+        if len(text_preview.strip()) < 500:
+            for print_url in [url.rstrip('/') + '/print', url + ('&' if '?' in url else '?') + 'print=1']:
+                try:
+                    await _load_page(page, print_url)
+                    candidate_html = await page.content()
+                    _, candidate_text = clean_html_to_text(candidate_html)
+                    if len(candidate_text.strip()) > len(text_preview.strip()):
+                        html = candidate_html
+                        final_url = page.url
+                        break
+                except Exception:
+                    pass
 
-        # PDF (chromium only, headless)
+        screenshot_bytes = await page.screenshot(full_page=True, type="jpeg", quality=85)
         pdf_bytes = await page.pdf(
             format="A4",
             print_background=True,
             margin={"top": "12mm", "bottom": "12mm", "left": "10mm", "right": "10mm"},
         )
 
-        return CaptureResult(
-            html=html,
-            pdf_bytes=pdf_bytes,
-            screenshot_bytes=screenshot_bytes,
-            final_url=final_url,
-        )
+        return CaptureResult(html=html, pdf_bytes=pdf_bytes,
+                              screenshot_bytes=screenshot_bytes, final_url=final_url)
     except Exception as e:
-        error = f"{type(e).__name__}: {e}"
         return CaptureResult(html="", pdf_bytes=None, screenshot_bytes=None,
-                              final_url=url, error=error)
+                              final_url=url, error=f"{type(e).__name__}: {e}")
     finally:
         try:
             await ctx.close()
@@ -141,7 +189,7 @@ async def capture_url(url: str) -> CaptureResult:
 
 
 # ---------------------------------------------------------------------------
-# Session storage for in-flight captures (between /extract and /recipes)
+# Session storage helpers
 # ---------------------------------------------------------------------------
 
 def session_dir(session_id: str) -> str:
@@ -164,10 +212,6 @@ def save_session_capture(session_id: str, result: CaptureResult) -> None:
 
 
 def promote_session_to_recipe(session_id: str, recipe_id: str) -> tuple[Optional[str], Optional[str]]:
-    """
-    Move PDF and screenshot from temp session dir to the recipe's permanent dir.
-    Returns (pdf_filename, screenshot_filename).
-    """
     src = session_dir(session_id)
     if not os.path.isdir(src):
         return None, None
@@ -187,7 +231,6 @@ def promote_session_to_recipe(session_id: str, recipe_id: str) -> tuple[Optional
         screen_name = "page.jpg"
         os.replace(screen_src, os.path.join(dst, screen_name))
 
-    # Best-effort cleanup
     try:
         os.rmdir(src)
     except OSError:
@@ -197,7 +240,6 @@ def promote_session_to_recipe(session_id: str, recipe_id: str) -> tuple[Optional
 
 
 def cleanup_orphan_sessions(max_age_seconds: int = 3600) -> int:
-    """Remove session dirs older than max_age. Returns number of dirs removed."""
     import time
     base = os.path.join(settings.data_dir, "sessions")
     if not os.path.isdir(base):
@@ -209,8 +251,7 @@ def cleanup_orphan_sessions(max_age_seconds: int = 3600) -> int:
         if not os.path.isdir(path):
             continue
         try:
-            age = now - os.path.getmtime(path)
-            if age > max_age_seconds:
+            if now - os.path.getmtime(path) > max_age_seconds:
                 for f in os.listdir(path):
                     try:
                         os.remove(os.path.join(path, f))

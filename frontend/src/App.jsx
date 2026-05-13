@@ -1428,7 +1428,7 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
             <StructuredView recipe={recipe} category={category} />
           )}
           {tab === 'inapp' && recipe.url && (
-            <InAppBrowser url={recipe.url} />
+            <InAppBrowser url={recipe.url} onRecapture={handleRecapture} recapturing={recapturing} />
           )}
           {tab === 'pdf' && recipe.pdf_url && (
             <div className="h-full bg-ink/5">
@@ -1480,7 +1480,7 @@ function ShareMenuItem({ onClick, icon, title, subtitle }) {
   );
 }
 
-function InAppBrowser({ url }) {
+function InAppBrowser({ url, onRecapture, recapturing }) {
   const [blocked, setBlocked] = useState(false);
   const domain = url ? new URL(url).hostname.replace(/^www\./, '') : '';
 
@@ -1491,11 +1491,20 @@ function InAppBrowser({ url }) {
         <span className="font-mono">{domain}</span>
         <span>·</span>
         <span>חלק מהאתרים חוסמים הצגה בתוך אפליקציה</span>
-        <a href={url} target="_blank" rel="noopener noreferrer"
-           className="text-terracotta hover:underline flex items-center gap-0.5 ms-auto">
-          <ExternalLink size={11} />
-          פתח בדפדפן
-        </a>
+        <div className="ms-auto flex items-center gap-2">
+          {onRecapture && (
+            <button onClick={onRecapture} disabled={recapturing}
+              className="flex items-center gap-1 text-terracotta hover:underline disabled:opacity-50">
+              {recapturing ? <Loader2 size={11} className="animate-spin" /> : <Camera size={11} />}
+              שמור צילום
+            </button>
+          )}
+          <a href={url} target="_blank" rel="noopener noreferrer"
+             className="text-terracotta hover:underline flex items-center gap-0.5">
+            <ExternalLink size={11} />
+            פתח בדפדפן
+          </a>
+        </div>
       </div>
 
       {blocked ? (
@@ -1518,6 +1527,32 @@ function InAppBrowser({ url }) {
           title="מתכון מקורי"
         />
       )}
+    </div>
+  );
+}
+
+// Renders ingredients/instructions with section headers (lines ending in ':') styled as bold headings
+function SectionedText({ text, className = '' }) {
+  if (!text?.trim()) return null;
+  return (
+    <div className={`space-y-0.5 ${className}`}>
+      {text.split('\n').map((line, i) => {
+        const t = line.trim();
+        if (!t) return <div key={i} className="h-2" />;
+        // Section header: doesn't start with bullet/number and ends with ':'
+        if (!t.startsWith('•') && !/^\d+\./.test(t) && t.endsWith(':')) {
+          return (
+            <div key={i} className="font-bold text-[15px] text-ink pt-3 first:pt-0">
+              {t}
+            </div>
+          );
+        }
+        return (
+          <div key={i} className="text-[15px] leading-[1.85] text-ink/90">
+            {t}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1563,7 +1598,7 @@ function StructuredView({ recipe, category }) {
           <h2 className="font-display text-xl font-bold mb-3 flex items-center gap-2">
             <span className="text-terracotta">📝</span> רכיבים
           </h2>
-          <div className="whitespace-pre-wrap text-[15px] leading-[1.85] text-ink/90">{recipe.ingredients}</div>
+          <SectionedText text={recipe.ingredients} />
         </section>
       )}
 
@@ -1572,7 +1607,7 @@ function StructuredView({ recipe, category }) {
           <h2 className="font-display text-xl font-bold mb-3 flex items-center gap-2">
             <span className="text-terracotta">👨‍🍳</span> הוראות הכנה
           </h2>
-          <div className="whitespace-pre-wrap text-[15px] leading-[1.85] text-ink/90">{recipe.instructions}</div>
+          <SectionedText text={recipe.instructions} />
         </section>
       )}
 

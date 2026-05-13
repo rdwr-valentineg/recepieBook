@@ -37,8 +37,8 @@ TEXT_PROMPT = """You are extracting a recipe from webpage text. Return ONLY vali
 {{
   "title": "recipe name in original language",
   "category": "ONE of: desserts, pastries, bread, meat, fish, salads, pasta, soups, stews, breakfast, drinks, other",
-  "ingredients": "one ingredient per line prefixed with '• '. Group sections with headers like 'לבצק:'",
-  "instructions": "numbered steps 1. 2. 3. one per line",
+  "ingredients": "multiline. If the recipe has sections (dough+filling, sauce+base etc.), use a section header ending with ':' (e.g. 'לבצק:', 'למילוי:', 'לרוטב:') before each group, then each ingredient on its own line prefixed with '• '.",
+  "instructions": "numbered steps. If there are named stages (e.g. 'הכנת הבצק:'), include them as section headers before the relevant steps.",
   "notes": "serving size, time, dietary tags, tips. Empty string if none."
 }}
 
@@ -58,8 +58,8 @@ Return ONLY valid JSON (no markdown fences):
 {
   "title": "recipe name in original language",
   "category": "ONE of: desserts, pastries, bread, meat, fish, salads, pasta, soups, stews, breakfast, drinks, other",
-  "ingredients": "one ingredient per line prefixed with '• '",
-  "instructions": "numbered steps 1. 2. 3.",
+  "ingredients": "multiline. Use section headers ending with ':' for separate groups (e.g. 'לבצק:', 'למילוי:'). Each ingredient prefixed with '• '.",
+  "instructions": "numbered steps. Named stages as section headers.",
   "notes": "serving size, time, dietary tags, tips. Empty string if none."
 }
 
@@ -180,7 +180,7 @@ def list_providers() -> list[ProviderInfo]:
 
 async def _extract_compat_text(provider: Provider, text: str, title: str, url: str) -> ProviderResult:
     started = time.monotonic()
-    prompt = TEXT_PROMPT.format(text=text[:18000], title=title, url=url or "")
+    prompt = TEXT_PROMPT.format(text=text[:40000], title=title, url=url or "")
     try:
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             resp = await client.post(
@@ -267,7 +267,7 @@ async def _extract_compat_vision(provider: Provider, images: list[bytes]) -> Pro
 
 async def _extract_anthropic_text(provider: Provider, text: str, title: str, url: str) -> ProviderResult:
     started = time.monotonic()
-    prompt = TEXT_PROMPT.format(text=text[:18000], title=title, url=url or "")
+    prompt = TEXT_PROMPT.format(text=text[:40000], title=title, url=url or "")
     try:
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             resp = await client.post(
