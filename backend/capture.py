@@ -127,6 +127,59 @@ async def _load_page(page, url: str) -> None:
     await page.wait_for_timeout(600)
 
 
+async def _generate_pdf(page) -> bytes:
+    """Generate a PDF that matches the actual content height, avoiding blank trailing pages.
+
+    Root cause of the "one good page + one empty page" bug:
+    Many sites set `min-height: 100vh` (or similar) on html/body so the
+    page always fills the viewport. When Playwright converts that to A4,
+    the inflated height rounds up to an extra blank page.
+
+    Fix: before calling page.pdf() —
+      1. Inject CSS that collapses min-height on html/body and hides
+         sticky/fixed elements that don't belong in print.
+      2. Re-measure the real content height and use it as the page height,
+         so Playwright never allocates a page it doesn't need.
+    """
+    # Collapse layout inflation and strip non-content chrome
+    await page.add_style_tag(content="""
+        html, body {
+            height: auto !important;
+            min-height: 0 !important;
+            overflow: visible !important;
+        }
+        /* Hide sticky headers, cookie banners, chat widgets, back-to-top buttons */
+        header, nav, .sticky, .fixed, [class*="cookie"], [class*="banner"],
+        [class*="popup"], [class*="modal"], [id*="chat"], [class*="chat"],
+        [class*="back-to-top"], [class*="scroll-top"],
+        [style*="position: fixed"], [style*="position:fixed"] {
+            position: static !important;
+        }
+        /* Ensure images don't overflow and break across pages awkwardly */
+        img { max-width: 100% !important; break-inside: avoid; }
+    """)
+
+    # Let the style settle
+    await page.wait_for_timeout(200)
+
+    # Measure real content height after style injection
+    content_height_px = await page.evaluate(
+        "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+    )
+
+    # A4 width = 794px at 96dpi. Convert content height to mm (1px ≈ 0.2646mm).
+    # We cap at 5000mm (~19m) to avoid runaway pages on broken layouts.
+    height_mm = min(content_height_px * 0.2646, 5000)
+
+    pdf_bytes = await page.pdf(
+        width="794px",
+        height=f"{height_mm:.1f}mm",
+        print_background=True,
+        margin={"top": "12mm", "bottom": "12mm", "left": "10mm", "right": "10mm"},
+    )
+    return pdf_bytes
+
+
 async def capture_url(url: str) -> CaptureResult:
     """Open URL in chromium, return HTML + PDF bytes + screenshot bytes.
 
@@ -168,11 +221,7 @@ async def capture_url(url: str) -> CaptureResult:
                     pass
 
         screenshot_bytes = await page.screenshot(full_page=True, type="jpeg", quality=85)
-        pdf_bytes = await page.pdf(
-            format="A4",
-            print_background=True,
-            margin={"top": "12mm", "bottom": "12mm", "left": "10mm", "right": "10mm"},
-        )
+        pdf_bytes = await _generate_pdf(page)
 
         return CaptureResult(html=html, pdf_bytes=pdf_bytes,
                               screenshot_bytes=screenshot_bytes, final_url=final_url)
@@ -244,11 +293,7 @@ async def capture_from_fetched_html(url: str) -> CaptureResult:
         await page.wait_for_timeout(400)
 
         screenshot_bytes = await page.screenshot(full_page=True, type="jpeg", quality=85)
-        pdf_bytes = await page.pdf(
-            format="A4",
-            print_background=True,
-            margin={"top": "12mm", "bottom": "12mm", "left": "10mm", "right": "10mm"},
-        )
+        pdf_bytes = await _generate_pdf(page)
         return CaptureResult(html=html, pdf_bytes=pdf_bytes,
                               screenshot_bytes=screenshot_bytes, final_url=final_url)
     except Exception as e:
