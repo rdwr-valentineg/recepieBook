@@ -1640,11 +1640,29 @@ function InAppBrowser({ url, onRecapture, recapturing }) {
         <span>·</span>
         <span>חלק מהאתרים חוסמים הצגה בתוך אפליקציה</span>
         <div className="ms-auto flex items-center gap-2">
+          {/* Primary: open in popup with the user's own session and trigger print dialog.
+              This captures the full authenticated page that server-side Playwright can't see. */}
+          <button
+            onClick={() => {
+              const w = window.open(url, '_blank',
+                'width=960,height=720,menubar=yes,toolbar=yes,location=yes,status=yes,scrollbars=yes');
+              if (w) {
+                w.addEventListener('load', () => setTimeout(() => w.print(), 1200));
+              }
+            }}
+            className="flex items-center gap-1 text-terracotta hover:underline"
+            title="פותח את הדף בחלון חדש עם ההתחברות שלך ומציג דיאלוג הדפסה – בחר 'שמור כ-PDF'"
+          >
+            <FileDown size={11} />
+            שמור כ-PDF
+          </button>
+          {/* Secondary: server-side Playwright capture — works for public/non-paywalled sites */}
           {onRecapture && (
             <button onClick={onRecapture} disabled={recapturing}
-              className="flex items-center gap-1 text-terracotta hover:underline disabled:opacity-50">
+              className="flex items-center gap-1 text-ink/40 hover:text-ink/70 disabled:opacity-50"
+              title="צילום שרת – מתאים לאתרים ציבוריים בלי התחברות">
               {recapturing ? <Loader2 size={11} className="animate-spin" /> : <Camera size={11} />}
-              שמור צילום
+              צילום שרת
             </button>
           )}
           <a href={url} target="_blank" rel="noopener noreferrer"
