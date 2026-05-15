@@ -1576,7 +1576,7 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
             <StructuredView recipe={recipe} category={category} onUpdate={onUpdate} showToast={showToast} />
           )}
           {tab === 'inapp' && recipe.url && (
-            <InAppBrowser url={recipe.url} onRecapture={handleRecapture} recapturing={recapturing} />
+            <InAppBrowser url={recipe.url} pdfUrl={recipe.pdf_url} recipeId={recipe.id} onRecapture={handleRecapture} recapturing={recapturing} onUpdate={onUpdate} showToast={showToast} />
           )}
           {tab === 'pdf' && recipe.pdf_url && (
             <div className="h-full bg-ink/5">
@@ -1628,9 +1628,26 @@ function ShareMenuItem({ onClick, icon, title, subtitle }) {
   );
 }
 
-function InAppBrowser({ url, onRecapture, recapturing }) {
+function InAppBrowser({ url, pdfUrl, recipeId, onRecapture, recapturing, onUpdate, showToast }) {
   const [blocked, setBlocked] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const pdfRef = useRef(null);
   const domain = url ? new URL(url).hostname.replace(/^www\./, '') : '';
+
+  const handlePdfUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const updated = await api.uploadPdf(recipeId, file);
+      onUpdate?.(updated);
+      showToast?.('ה-PDF הועלה ✓');
+    } catch (err) {
+      showToast?.(`שגיאה: ${err.message}`);
+    }
+    setUploading(false);
+    e.target.value = '';
+  };
 
   return (
     <div className="flex flex-col h-full min-h-[70vh]">
@@ -1640,27 +1657,24 @@ function InAppBrowser({ url, onRecapture, recapturing }) {
         <span>·</span>
         <span>חלק מהאתרים חוסמים הצגה בתוך אפליקציה</span>
         <div className="ms-auto flex items-center gap-2">
-          {/* Primary: open in popup with the user's own session and trigger print dialog.
-              This captures the full authenticated page that server-side Playwright can't see. */}
-          <button
-            onClick={() => {
-              const w = window.open(url, '_blank',
-                'width=960,height=720,menubar=yes,toolbar=yes,location=yes,status=yes,scrollbars=yes');
-              if (w) {
-                w.addEventListener('load', () => setTimeout(() => w.print(), 1200));
-              }
-            }}
-            className="flex items-center gap-1 text-terracotta hover:underline"
-            title="פותח את הדף בחלון חדש עם ההתחברות שלך ומציג דיאלוג הדפסה – בחר 'שמור כ-PDF'"
-          >
-            <FileDown size={11} />
-            שמור כ-PDF
+          {pdfUrl && (
+            <a href={pdfUrl} target="_blank" rel="noopener noreferrer"
+               className="flex items-center gap-1 text-terracotta hover:underline">
+              <FileDown size={11} />
+              PDF
+            </a>
+          )}
+          <button onClick={() => pdfRef.current?.click()} disabled={uploading}
+            className="flex items-center gap-1 text-ink/50 hover:text-ink/80 disabled:opacity-50"
+            title="העלה PDF של המתכון">
+            {uploading ? <Loader2 size={11} className="animate-spin" /> : <FileText size={11} />}
+            {pdfUrl ? 'החלף PDF' : 'העלה PDF'}
           </button>
-          {/* Secondary: server-side Playwright capture — works for public/non-paywalled sites */}
+          <input ref={pdfRef} type="file" accept="application/pdf" className="hidden" onChange={handlePdfUpload} />
           {onRecapture && (
             <button onClick={onRecapture} disabled={recapturing}
               className="flex items-center gap-1 text-ink/40 hover:text-ink/70 disabled:opacity-50"
-              title="צילום שרת – מתאים לאתרים ציבוריים בלי התחברות">
+              title="צילום שרת – מתאים לאתרים ציבוריים">
               {recapturing ? <Loader2 size={11} className="animate-spin" /> : <Camera size={11} />}
               צילום שרת
             </button>

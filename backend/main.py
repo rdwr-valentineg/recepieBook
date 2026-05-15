@@ -424,6 +424,46 @@ def get_recipe_pdf(recipe_id: str, db: Session = Depends(get_db),
     return FileResponse(_capture_path(r, "pdf"), media_type="application/pdf")
 
 
+@app.post("/api/recipes/{recipe_id}/pdf")
+async def upload_pdf(
+    recipe_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_auth),
+):
+    r = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not r:
+        raise HTTPException(404, "מתכון לא נמצא")
+    if file.content_type != "application/pdf":
+        raise HTTPException(415, "יש להעלות קובץ PDF בלבד")
+
+    raw = await file.read()
+    if len(raw) > 50 * 1024 * 1024:
+        raise HTTPException(413, "הקובץ גדול מ-50MB")
+
+    cap_dir = recipe_capture_dir(recipe_id)
+    os.makedirs(cap_dir, exist_ok=True)
+
+    # Remove old PDF if present
+    if r.pdf_filename:
+        old = os.path.join(cap_dir, r.pdf_filename)
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+
+    fname = "page.pdf"
+    with open(os.path.join(cap_dir, fname), "wb") as f:
+        f.write(raw)
+
+    r.pdf_filename = fname
+    from datetime import datetime
+    r.captured_at = datetime.utcnow()
+    db.commit()
+    db.refresh(r)
+    return r.to_dict()
+
+
 @app.get("/api/recipes/{recipe_id}/screenshot")
 def get_recipe_screenshot(recipe_id: str, db: Session = Depends(get_db),
                           _: bool = Depends(require_auth)):
