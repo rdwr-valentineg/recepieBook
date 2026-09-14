@@ -1,0 +1,13 @@
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = [
+    "B008",    # FastAPI's `Depends(...)` in argument defaults is the intended pattern
+    "BLE001",  # broad `except Exception` is used deliberately for provider/network fallbacks
+    "S110",    # silent `try/except/pass`
+    "S112",    # silent `try/except/continue`
+    "ASYNC230", # blocking `open()` inside async endpoints (small local file writes)
+    "DTZ003",  # naive `datetime.utcnow()`
+    "DTZ005",  # naive `datetime.now()`
+]

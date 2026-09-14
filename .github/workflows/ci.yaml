@@ -42,8 +42,8 @@ jobs:
       - name: Install ruff
         run: pip install ruff
 
-      #- name: Lint
-      #  run: ruff check backend/
+      - name: Lint
+        run: ruff check backend/
 
   # ── Frontend build ────────────────────────────────────────────────────────
   build-frontend:

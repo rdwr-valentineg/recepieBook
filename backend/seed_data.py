@@ -132,7 +132,7 @@ def seed_if_empty(db: Session) -> int:
             instructions=entry.get("instructions", ""),
             notes=entry.get("notes", ""),
             added_by=entry.get("added_by", ""),
-            date=entry.get("date", datetime.datetime.now("%Y-%m-%d")),
+            date=entry.get("date", datetime.now().strftime("%Y-%m-%d")),
             image_filename=image_filename,
         )
         db.add(r)
