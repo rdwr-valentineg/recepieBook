@@ -1,9 +1,9 @@
 """Shared-password authentication via signed cookie."""
 import hmac
-from itsdangerous import TimestampSigner, BadSignature, SignatureExpired
-from fastapi import Cookie, HTTPException, Response
 
 from config import settings
+from fastapi import Cookie, HTTPException, Response
+from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 
 COOKIE_NAME = "recipe_session"
 MAX_AGE_SECONDS = settings.session_max_age_days * 24 * 3600

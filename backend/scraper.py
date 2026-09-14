@@ -1,6 +1,7 @@
 """Convert raw HTML to clean text content for LLM input."""
-import trafilatura
 from urllib.parse import urlparse
+
+import trafilatura
 
 
 def domain_of(url: str) -> str:

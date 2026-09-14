@@ -3,11 +3,10 @@ import os
 import shutil
 import uuid
 from datetime import datetime
-from sqlalchemy.orm import Session
 
-from db import Recipe
 from config import settings
-
+from db import Recipe
+from sqlalchemy.orm import Session
 
 SHEPHERD_INGREDIENTS = """לפירה (שכבה עליונה):
 • כרובית בינונית
@@ -36,67 +35,66 @@ SHEPHERD_INSTRUCTIONS = """1. מחממים את התנור ל-180-200 מעלות
 
 
 SEED = [
-    dict(title="טירמיסו של הביוקר", category="desserts",
-         url="https://mobile.mako.co.il/food-recipes/recipes_column-desserts/Recipe-fc37509a6a9ba61027.htm",
-         added_by="baseline", date="2024-06-16", notes="מתכון מהאתר של מאקו"),
+    {"title": "טירמיסו של הביוקר", "category": "desserts",
+         "url": "https://mobile.mako.co.il/food-recipes/recipes_column-desserts/Recipe-fc37509a6a9ba61027.htm",
+         "added_by": "baseline", "date": "2024-06-16", "notes": "מתכון מהאתר של מאקו"},
 
-    dict(title="ריבועי הריבה של מיקי שמו", category="pastries",
-         url="https://www.hashulchan.co.il/%D7%9E%D7%AA%D7%9B%D7%95%D7%A0%D7%99%D7%9D/%D7%A8%D7%99%D7%91%D7%95%D7%A2%D7%99-%D7%94%D7%A8%D7%99%D7%91%D7%94-%D7%A9%D7%9C-%D7%9E%D7%99%D7%A7%D7%99-%D7%A9%D7%9E%D7%95/",
-         added_by="baseline", date="2024-06-16"),
+    {"title": "ריבועי הריבה של מיקי שמו", "category": "pastries",
+         "url": "https://www.hashulchan.co.il/%D7%9E%D7%AA%D7%9B%D7%95%D7%A0%D7%99%D7%9D/%D7%A8%D7%99%D7%91%D7%95%D7%A2%D7%99-%D7%94%D7%A8%D7%99%D7%91%D7%94-%D7%A9%D7%9C-%D7%9E%D7%99%D7%A7%D7%99-%D7%A9%D7%9E%D7%95/",
+         "added_by": "baseline", "date": "2024-06-16"},
 
-    dict(title="מתכון מ-Biscotti", category="pastries",
-         url="https://www.biscotti.co.il/recipes/?ContentID=31282",
-         added_by="baseline", date="2024-08-01"),
+    {"title": "מתכון מ-Biscotti", "category": "pastries",
+         "url": "https://www.biscotti.co.il/recipes/?ContentID=31282",
+         "added_by": "baseline", "date": "2024-08-01"},
 
-    dict(title="מתכון לילדים ממאקו", category="pastries",
-         url="https://mobile.mako.co.il/food-cooking_magazine/kids-recipes/Recipe-d80b3bbbdc9be21006.htm",
-         added_by="baseline", date="2024-08-01"),
+    {"title": "מתכון לילדים ממאקו", "category": "pastries",
+         "url": "https://mobile.mako.co.il/food-cooking_magazine/kids-recipes/Recipe-d80b3bbbdc9be21006.htm",
+         "added_by": "baseline", "date": "2024-08-01"},
 
-    dict(title="פאי רועים", category="meat", url=None,
-         added_by="baseline", date="2024-09-15",
-         ingredients=SHEPHERD_INGREDIENTS, instructions=SHEPHERD_INSTRUCTIONS,
-         notes="20 דקות הכנה, 5 מנות. דל פחמימה ✨ ללא גלוטן.",
-         image_source="shepherd-pie.jpg"),
+    {"title": "פאי רועים", "category": "meat", "url": None,
+         "added_by": "baseline", "date": "2024-09-15",
+         "ingredients": SHEPHERD_INGREDIENTS, "instructions": SHEPHERD_INSTRUCTIONS,
+         "notes": "20 דקות הכנה, 5 מנות. דל פחמימה ✨ ללא גלוטן.",
+         "image_source": "shepherd-pie.jpg"},
 
-    dict(title="עוגת אוכמניות ושוקולד לבן", category="desserts",
-         url="https://www.oogio.net/white_chocolate_blueberry_cake/amp/",
-         added_by="baseline", date="2025-12-13"),
+    {"title": "עוגת אוכמניות ושוקולד לבן", "category": "desserts",
+         "url": "https://www.oogio.net/white_chocolate_blueberry_cake/amp/",
+         "added_by": "baseline", "date": "2025-12-13"},
 
-    dict(title="חיתוכיות ריבה ופירורים", category="pastries",
-         url="https://kerenagam.co.il/%D7%97%D7%99%D7%AA%D7%95%D7%9B%D7%99%D7%95%D7%AA-%D7%A8%D7%99%D7%91%D7%AA-%D7%95%D7%A4%D7%99%D7%A8%D7%95%D7%A8%D7%99%D7%9D/",
-         added_by="baseline", date="2025-12-30"),
+    {"title": "חיתוכיות ריבה ופירורים", "category": "pastries",
+         "url": "https://kerenagam.co.il/%D7%97%D7%99%D7%AA%D7%95%D7%9B%D7%99%D7%95%D7%AA-%D7%A8%D7%99%D7%91%D7%AA-%D7%95%D7%A4%D7%99%D7%A8%D7%95%D7%A8%D7%99%D7%9D/",
+         "added_by": "baseline", "date": "2025-12-30"},
 
-    dict(title="פנקייקים כמו בבית", category="breakfast",
-         url="https://www.krutit.co.il/%D7%A4%D7%A0%D7%A7%D7%99%D7%99%D7%A7%D7%99%D7%9D-%D7%9B%D7%9E%D7%95-%D7%91%D7%91%D7%99%D7%AA-%D7%94%D7%A4%D7%A0%D7%A7%D7%99%D7%99%D7%A7-%D7%A7%D7%9C%D7%99%D7%9D-%D7%9E%D7%90%D7%95%D7%93-%D7%9C%D7%94/",
-         added_by="baseline", date="2026-01-31", notes="הפנקייק קלים מאוד להכנה"),
+    {"title": "פנקייקים כמו בבית", "category": "breakfast",
+         "url": "https://www.krutit.co.il/%D7%A4%D7%A0%D7%A7%D7%99%D7%99%D7%A7%D7%99%D7%9D-%D7%9B%D7%9E%D7%95-%D7%91%D7%91%D7%99%D7%AA-%D7%94%D7%A4%D7%A0%D7%A7%D7%99%D7%99%D7%A7-%D7%A7%D7%9C%D7%99%D7%9D-%D7%9E%D7%90%D7%95%D7%93-%D7%9C%D7%94/",
+         "added_by": "baseline", "date": "2026-01-31", "notes": "הפנקייק קלים מאוד להכנה"},
 
-    dict(title="טארט גראטן תפוחי אדמה מופלא", category="stews",
-         url="https://www.krutit.co.il/%d7%98%d7%90%d7%a8%d7%98-%d7%92%d7%a8%d7%90%d7%98%d7%9f-%d7%aa%d7%a4%d7%95%d7%97%d7%99-%d7%90%d7%93%d7%9e%d7%94-%d7%9e%d7%95%d7%a4%d7%9c%d7%90/",
-         added_by="baseline", date="2026-02-12"),
+    {"title": "טארט גראטן תפוחי אדמה מופלא", "category": "stews",
+         "url": "https://www.krutit.co.il/%d7%98%d7%90%d7%a8%d7%98-%d7%92%d7%a8%d7%90%d7%98%d7%9f-%d7%aa%d7%a4%d7%95%d7%97%d7%99-%d7%90%d7%93%d7%9e%d7%94-%d7%9e%d7%95%d7%a4%d7%9c%d7%90/",
+         "added_by": "baseline", "date": "2026-02-12"},
 
-    dict(title="רולדת תותים וקצפת כמו של פעם", category="desserts",
-         url="https://www.lichtenstadt.com/2021/12/%D7%A8%D7%95%D7%9C%D7%93%D7%AA-%D7%AA%D7%95%D7%AA%D7%99%D7%9D-%D7%95%D7%A7%D7%A6%D7%A4%D7%AA-%D7%9B%D7%9E%D7%95-%D7%A9%D7%9C-%D7%A4%D7%A2%D7%9D/",
-         added_by="baseline", date="2026-02-20"),
+    {"title": "רולדת תותים וקצפת כמו של פעם", "category": "desserts",
+         "url": "https://www.lichtenstadt.com/2021/12/%D7%A8%D7%95%D7%9C%D7%93%D7%AA-%D7%AA%D7%95%D7%AA%D7%99%D7%9D-%D7%95%D7%A7%D7%A6%D7%A4%D7%AA-%D7%9B%D7%9E%D7%95-%D7%A9%D7%9C-%D7%A4%D7%A2%D7%9D/",
+         "added_by": "baseline", "date": "2026-02-20"},
 
-    dict(title="מתכון לפיתות", category="bread",
-         url="https://thebaker.science/%D7%9E%D7%AA%D7%9B%D7%95%D7%9F-%D7%9C%D7%A4%D7%99%D7%AA%D7%95%D7%AA/",
-         added_by="baseline", date="2026-02-20"),
+    {"title": "מתכון לפיתות", "category": "bread",
+         "url": "https://thebaker.science/%D7%9E%D7%AA%D7%9B%D7%95%D7%9F-%D7%9C%D7%A4%D7%99%D7%AA%D7%95%D7%AA/",
+         "added_by": "baseline", "date": "2026-02-20"},
 
-    dict(title="טירמיסו של פודי", category="desserts",
-         url="https://foody.co.il/foody_recipe/%D7%98%D7%99%D7%A8%D7%9E%D7%99%D7%A1%D7%95-%D7%9B%D7%96%D7%94-%D7%A9%D7%9E%D7%99%D7%99%D7%A9%D7%A8%D7%99%D7%9D-%D7%95%D7%9E%D7%99%D7%99%D7%A9%D7%A8%D7%99%D7%9D-%D7%95%D7%9E%D7%99%D7%99%D7%A9%D7%A8/",
-         added_by="baseline", date="2026-03-25", notes='טירמיסו "כזה שמיישרים"'),
+    {"title": "טירמיסו של פודי", "category": "desserts",
+         "url": "https://foody.co.il/foody_recipe/%D7%98%D7%99%D7%A8%D7%9E%D7%99%D7%A1%D7%95-%D7%9B%D7%96%D7%94-%D7%A9%D7%9E%D7%99%D7%99%D7%A9%D7%A8%D7%99%D7%9D-%D7%95%D7%9E%D7%99%D7%99%D7%A9%D7%A8%D7%99%D7%9D-%D7%95%D7%9E%D7%99%D7%99%D7%A9%D7%A8/",
+         "added_by": "baseline", "date": "2026-03-25", "notes": 'טירמיסו "כזה שמיישרים"'},
 
-    dict(title="ברווני באסק צ׳יזקייק", category="desserts",
-         url="https://parischezsharon.com/he/2026/03/brownie-basque-cheesecake.html",
-         added_by="baseline", date="2026-03-31", notes="שילוב של ברווני וצ׳יזקייק בסגנון באסקי"),
+    {"title": "ברווני באסק צ׳יזקייק", "category": "desserts",
+         "url": "https://parischezsharon.com/he/2026/03/brownie-basque-cheesecake.html",
+         "added_by": "baseline", "date": "2026-03-31", "notes": "שילוב של ברווני וצ׳יזקייק בסגנון באסקי"},
 
-    dict(title="מתכון מפייסבוק", category="other",
-         url="https://www.facebook.com/share/p/17U8jvECtj/",
-         added_by="baseline", date="2026-04-08", notes="יש למלא את פרטי המתכון"),
-
-    dict(title="מתכון עוף ממאקו", category="meat",
-         url="https://www.mako.co.il/food-recipes/recipes_column-chicken/Recipe-f150ada24245a91027.htm",
-         added_by="baseline", date="2026-05-10"),
+    {"title": "מתכון מפייסבוק", "category": "other",
+         "url": "https://www.facebook.com/share/p/17U8jvECtj/",
+         "added_by": "baseline", "date": "2026-04-08", "notes": "יש למלא את פרטי המתכון"},\
+     {"title":"מתכון עוף ממאקו", "category":"meat",
+         "url":"https://www.mako.co.il/food-recipes/recipes_column-chicken/Recipe-f150ada24245a91027.htm",
+         "added_by":"baseline", "date":"2026-05-10"},
 ]
 
 
@@ -134,7 +132,7 @@ def seed_if_empty(db: Session) -> int:
             instructions=entry.get("instructions", ""),
             notes=entry.get("notes", ""),
             added_by=entry.get("added_by", ""),
-            date=entry.get("date", datetime.utcnow().strftime("%Y-%m-%d")),
+            date=entry.get("date", datetime.datetime.now("%Y-%m-%d")),
             image_filename=image_filename,
         )
         db.add(r)

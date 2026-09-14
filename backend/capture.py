@@ -6,27 +6,26 @@ Each capture opens its own browser context (cookies, storage) for isolation.
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Optional
-
-from playwright.async_api import async_playwright, Browser, Playwright, TimeoutError as PWTimeout
 
 from config import settings
+from playwright.async_api import Browser, Playwright, async_playwright
+from playwright.async_api import TimeoutError as PWTimeout
 
 
 @dataclass
 class CaptureResult:
     html: str
-    pdf_bytes: Optional[bytes]
-    screenshot_bytes: Optional[bytes]
+    pdf_bytes: bytes | None
+    screenshot_bytes: bytes | None
     final_url: str
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class PlaywrightHolder:
     """Process-wide Playwright + Chromium, started/stopped with the app."""
     _lock = asyncio.Lock()
-    _pw: Optional[Playwright] = None
-    _browser: Optional[Browser] = None
+    _pw: Playwright | None = None
+    _browser: Browser | None = None
 
     @classmethod
     async def get_browser(cls) -> Browser:
@@ -327,7 +326,7 @@ def save_session_capture(session_id: str, result: CaptureResult) -> None:
             f.write(result.screenshot_bytes)
 
 
-def promote_session_to_recipe(session_id: str, recipe_id: str) -> tuple[Optional[str], Optional[str]]:
+def promote_session_to_recipe(session_id: str, recipe_id: str) -> tuple[str | None, str | None]:
     src = session_dir(session_id)
     if not os.path.isdir(src):
         return None, None

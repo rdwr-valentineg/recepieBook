@@ -1,33 +1,32 @@
 """Pydantic schemas for API request/response."""
-from typing import Optional, List
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 # --- recipes ---------------------------------------------------------------
 
 class RecipeIn(BaseModel):
     title: str
     category: str = "other"
-    url: Optional[str] = None
+    url: str | None = None
     ingredients: str = ""
     instructions: str = ""
     notes: str = ""
     added_by: str = ""
-    date: Optional[str] = None
+    date: str | None = None
     # If set, server moves capture files (pdf, screenshot) from this session to
     # the new recipe's directory.
-    capture_session_id: Optional[str] = None
+    capture_session_id: str | None = None
 
 
 class RecipeUpdate(BaseModel):
-    title: Optional[str] = None
-    category: Optional[str] = None
-    url: Optional[str] = None
-    ingredients: Optional[str] = None
-    instructions: Optional[str] = None
-    notes: Optional[str] = None
-    added_by: Optional[str] = None
-    date: Optional[str] = None
+    title: str | None = None
+    category: str | None = None
+    url: str | None = None
+    ingredients: str | None = None
+    instructions: str | None = None
+    notes: str | None = None
+    added_by: str | None = None
+    date: str | None = None
     clear_image: bool = False
 
 
@@ -41,7 +40,7 @@ class LoginRequest(BaseModel):
 
 class ExtractRequest(BaseModel):
     url: str
-    providers: List[str] = Field(default_factory=lambda: ["anthropic", "openai", "xai", "gemini", "groq", "openrouter"])
+    providers: list[str] = Field(default_factory=lambda: ["anthropic", "openai", "xai", "gemini", "groq", "openrouter"])
     mode: str = "fallback"   # "fallback" = sequential, stop at first success | "parallel" = all at once
     capture: bool = True
 
@@ -57,8 +56,8 @@ class ExtractedRecipe(BaseModel):
 class ProviderResult(BaseModel):
     provider: str
     success: bool
-    data: Optional[ExtractedRecipe] = None
-    error: Optional[str] = None
+    data: ExtractedRecipe | None = None
+    error: str | None = None
     elapsed_ms: int = 0
 
 
@@ -66,16 +65,16 @@ class CaptureInfo(BaseModel):
     session_id: str
     has_pdf: bool
     has_screenshot: bool
-    screenshot_url: Optional[str] = None
-    pdf_url: Optional[str] = None
+    screenshot_url: str | None = None
+    pdf_url: str | None = None
 
 
 class ExtractResponse(BaseModel):
-    url: Optional[str] = None
+    url: str | None = None
     source_domain: str
     page_title: str = ""
-    capture: Optional[CaptureInfo] = None
-    results: List[ProviderResult]
+    capture: CaptureInfo | None = None
+    results: list[ProviderResult]
 
 
 # --- providers / share -----------------------------------------------------
@@ -88,7 +87,7 @@ class ProviderInfo(BaseModel):
 
 
 class ProvidersResponse(BaseModel):
-    providers: List[ProviderInfo]
+    providers: list[ProviderInfo]
 
 
 class ShareResponse(BaseModel):

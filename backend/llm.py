@@ -12,15 +12,13 @@ Any provider with its key/URL configured is automatically enabled.
 import asyncio
 import base64
 import json
-import time
 import re
+import time
 from dataclasses import dataclass
 
 import httpx
-
 from config import settings
-from schemas import ProviderResult, ExtractedRecipe, ProviderInfo
-
+from schemas import ExtractedRecipe, ProviderInfo, ProviderResult
 
 VALID_CATEGORIES = {
     "desserts", "pastries", "bread", "meat", "fish", "salads",

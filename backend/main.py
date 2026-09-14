@@ -44,42 +44,64 @@ import os
 import shutil
 import uuid
 from contextlib import asynccontextmanager
-from typing import Optional, List
-from fastapi import (
-    FastAPI, Depends, HTTPException, Response, Cookie,
-    UploadFile, File, Form
-)
-from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
 
-from config import settings
-from db import init_db, get_db, Recipe, new_share_token, session_scope
-from schemas import (
-    RecipeIn, RecipeUpdate, LoginRequest, ExtractRequest, ExtractResponse,
-    CaptureInfo, ProvidersResponse, ShareResponse, Category
-)
 from auth import (
-    require_auth, issue_session, clear_session, verify_password, is_authenticated,
+    clear_session,
+    is_authenticated,
+    issue_session,
+    require_auth,
+    verify_password,
 )
 from capture import (
-    capture_url, capture_from_fetched_html, save_session_capture,
-    promote_session_to_recipe, cleanup_orphan_sessions,
-    recipe_capture_dir, PlaywrightHolder,
+    PlaywrightHolder,
+    capture_from_fetched_html,
+    capture_url,
+    cleanup_orphan_sessions,
+    promote_session_to_recipe,
+    recipe_capture_dir,
+    save_session_capture,
+)
+from config import settings
+from db import Recipe, get_db, init_db, new_share_token, session_scope
+from fastapi import (
+    Cookie,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Response,
+    UploadFile,
+)
+from fastapi.responses import FileResponse
+from llm import (
+    cleanup_hebrew,
+    extract_with_fallback,
+    extract_with_fallback_vision,
+    extract_with_providers,
+    extract_with_providers_vision,
+    list_providers,
+)
+from schemas import (
+    CaptureInfo,
+    Category,
+    ExtractRequest,
+    ExtractResponse,
+    LoginRequest,
+    ProvidersResponse,
+    RecipeIn,
+    RecipeUpdate,
+    ShareResponse,
 )
 from scraper import clean_html_to_text, domain_of
-from llm import (
-    extract_with_providers, extract_with_providers_vision,
-    extract_with_fallback, extract_with_fallback_vision,
-    cleanup_hebrew, list_providers,
-)
 from seed_data import seed_if_empty
-
+from sqlalchemy.orm import Session
 
 # ---------------------------------------------------------------------------
 # CATEGORIES (kept in sync with the prompt)
 # ---------------------------------------------------------------------------
 
-CATEGORIES: List[Category] = [
+CATEGORIES: list[Category] = [
     Category(id="desserts",  label="עוגות וקינוחים", emoji="🍰"),
     Category(id="pastries",  label="מאפים ועוגיות", emoji="🥧"),
     Category(id="bread",     label="לחמים",          emoji="🍞"),
@@ -158,7 +180,7 @@ def logout(response: Response):
 
 
 @app.get("/api/auth/status")
-def auth_status(recipe_session: Optional[str] = Cookie(default=None)):
+def auth_status(recipe_session: str | None = Cookie(default=None)):
     return {"authenticated": is_authenticated(recipe_session)}
 
 
@@ -300,6 +322,7 @@ async def upload_image(
 
     # Compress with Pillow to a sensible max dimension
     from io import BytesIO
+
     from PIL import Image
     img = Image.open(BytesIO(raw))
     img.thumbnail((1600, 1600))
@@ -349,6 +372,7 @@ async def add_step_image(
         raise HTTPException(413, f"התמונה גדולה מ-{settings.max_image_size_mb}MB")
 
     from io import BytesIO
+
     from PIL import Image
     img = Image.open(BytesIO(raw))
     img.thumbnail((1600, 1600))
@@ -549,7 +573,7 @@ def delete_capture(recipe_id: str, db: Session = Depends(get_db),
 
 @app.post("/api/recipes/batch-extract")
 async def batch_extract(
-    body: dict = {},
+    body: dict | None = None,
     db: Session = Depends(get_db),
     _: bool = Depends(require_auth),
 ):
@@ -557,6 +581,8 @@ async def batch_extract(
     run LLM vision extraction and update the recipe in place.
     Returns immediately with a count; processing happens synchronously (one by one)."""
     import logging
+    if body is None:
+        body = {}
     logger = logging.getLogger("batch_extract")
 
     providers = body.get("providers", ["anthropic", "openai", "xai", "gemini", "groq", "openrouter"])
@@ -648,7 +674,7 @@ async def _apply_cleanup(results: list, providers: list[str]) -> list:
 @app.post("/api/extract", response_model=ExtractResponse)
 async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
     # Always capture if requested. Even on partial failure we try to return what we have.
-    capture_info: Optional[CaptureInfo] = None
+    capture_info: CaptureInfo | None = None
     page_text = ""
     page_title = ""
 
@@ -764,6 +790,7 @@ async def extract_from_file(
         filename.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")
     ):
         from io import BytesIO
+
         from PIL import Image as PilImage
         try:
             img = PilImage.open(BytesIO(raw))

@@ -1,15 +1,12 @@
 """SQLAlchemy models and database setup for MariaDB."""
 import os
 import secrets
-from datetime import datetime
-from sqlalchemy import (
-    create_engine, Column, String, Text, DateTime, func
-)
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from contextlib import contextmanager
+from datetime import datetime
 
 from config import settings
-
+from sqlalchemy import Column, DateTime, String, Text, create_engine, func
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 # --- engine ----------------------------------------------------------------
 

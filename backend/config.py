@@ -1,7 +1,7 @@
 """Application configuration loaded from environment variables."""
-from pydantic_settings import BaseSettings
+
 from pydantic import Field
-from typing import Optional
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -23,25 +23,25 @@ class Settings(BaseSettings):
     # ── Direct providers (tried first, in this order) ────────────────────────
 
     # Anthropic Claude — https://console.anthropic.com
-    anthropic_api_key: Optional[str] = None
+    anthropic_api_key: str | None = None
     anthropic_model: str = "claude-haiku-4-5-20251001"
 
     # OpenAI GPT — https://platform.openai.com
-    openai_api_key: Optional[str] = None
+    openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com/v1"
 
     # xAI Grok (free monthly credits) — https://console.x.ai
-    xai_api_key: Optional[str] = None
+    xai_api_key: str | None = None
     xai_model: str = "grok-3-mini"
     xai_vision_model: str = "grok-2-vision-1212"
 
     # Google Gemini (free tier) — https://aistudio.google.com/apikey
-    gemini_api_key: Optional[str] = None
+    gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
 
     # Groq (fast inference, free tier) — https://console.groq.com
-    groq_api_key: Optional[str] = None
+    groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
     groq_vision_model: str = "llama-3.2-11b-vision-preview"
 
@@ -51,14 +51,14 @@ class Settings(BaseSettings):
     # "openrouter/free" is OpenRouter's own smart router: automatically picks
     # whichever free model is available, including vision-capable ones.
     # No hardcoded slugs that go stale.
-    openrouter_api_key: Optional[str] = None
+    openrouter_api_key: str | None = None
     # "openrouter/free" listed 3 times = 3 automatic retries.
     # Each call picks a different random free model, so a retry often succeeds.
     openrouter_text_models: str = "openrouter/free,openrouter/free,openrouter/free"
     openrouter_vision_models: str = "openrouter/free,openrouter/free,openrouter/free"
 
     # Ollama (local k3s, last resort, no internet needed) — http://ollama:11434/v1
-    ollama_base_url: Optional[str] = None
+    ollama_base_url: str | None = None
     ollama_model: str = "qwen2.5:1.5b"
     ollama_vision_model: str = "moondream"
 
