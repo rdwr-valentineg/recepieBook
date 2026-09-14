@@ -645,6 +645,7 @@ async def _apply_cleanup(results: list, providers: list[str]) -> list:
             )
             break
     return results
+@app.post("/api/extract", response_model=ExtractResponse)
 async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
     # Always capture if requested. Even on partial failure we try to return what we have.
     capture_info: Optional[CaptureInfo] = None
