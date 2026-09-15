@@ -47,6 +47,19 @@ export const api = {
   createRecipe: (body) => request('/api/recipes', { method: 'POST', body: JSON.stringify(body) }),
   updateRecipe: (id, body) => request(`/api/recipes/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteRecipe: (id) => request(`/api/recipes/${id}`, { method: 'DELETE' }),
+  scaleRecipe: (id, factor) => request(`/api/recipes/${id}/scale?factor=${factor}`),
+  analyzeIngredients: (ingredients) => request('/api/ingredients/analyze', {
+    method: 'POST',
+    body: JSON.stringify({ ingredients }),
+  }),
+  convertIngredients: (ingredients, indices = null) => request('/api/ingredients/convert', {
+    method: 'POST',
+    body: JSON.stringify({ ingredients, indices }),
+  }),
+  batchTranslate: (opts = {}) => request('/api/recipes/batch-translate', {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  }),
   uploadImage: async (id, file) => {
     const fd = new FormData();
     fd.append('file', file);

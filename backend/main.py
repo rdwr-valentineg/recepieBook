@@ -44,6 +44,7 @@ import os
 import shutil
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC
 
 from auth import (
     clear_session,
@@ -76,17 +77,24 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from llm import (
     cleanup_hebrew,
+    ensure_hebrew,
     extract_with_fallback,
     extract_with_fallback_vision,
     extract_with_providers,
     extract_with_providers_vision,
+    hebrew_ratio,
+    is_hebrew,
     list_providers,
+    translate_to_hebrew,
 )
 from schemas import (
     CaptureInfo,
     Category,
+    ExtractedRecipe,
     ExtractRequest,
     ExtractResponse,
+    IngredientAnalyzeRequest,
+    IngredientConvertRequest,
     LoginRequest,
     ProvidersResponse,
     RecipeIn,
@@ -96,6 +104,7 @@ from schemas import (
 from scraper import clean_html_to_text, domain_of
 from seed_data import seed_if_empty
 from sqlalchemy.orm import Session
+from units import analyze_ingredients, apply_gram_conversion, scale_ingredients
 
 # ---------------------------------------------------------------------------
 # CATEGORIES (kept in sync with the prompt)
@@ -123,6 +132,22 @@ CATEGORIES: list[Category] = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Refuse to start quietly on shipped defaults. These are in the public
+    # repo, so a deployment still using them is effectively unauthenticated.
+    _DEFAULT_SECRET = "change-me-to-a-long-random-string-at-least-32-chars"
+    insecure = []
+    if settings.app_password == "changeme":
+        insecure.append("APP_PASSWORD")
+    if settings.session_secret == _DEFAULT_SECRET:
+        insecure.append("SESSION_SECRET")
+    if insecure:
+        print("=" * 70)
+        print(f"[SECURITY] Using the default value for: {', '.join(insecure)}")
+        print("[SECURITY] These values are published in the repo — anyone can")
+        print("[SECURITY] log in or forge a session cookie. Set them in the")
+        print("[SECURITY] recipe-book-secret Secret before exposing this app.")
+        print("=" * 70)
+
     # Init DB + seed
     init_db()
     with session_scope() as db:
@@ -235,10 +260,10 @@ def create_recipe(body: RecipeIn, db: Session = Depends(get_db), _: bool = Depen
         instructions=body.instructions or "",
         notes=body.notes or "",
         added_by=body.added_by or "",
-        date=body.date or datetime.utcnow().strftime("%Y-%m-%d"),
+        date=body.date or datetime.now(UTC).strftime("%Y-%m-%d"),
         pdf_filename=pdf_name,
         screenshot_filename=screen_name,
-        captured_at=datetime.utcnow() if (pdf_name or screen_name) else None,
+        captured_at=datetime.now(UTC) if (pdf_name or screen_name) else None,
         capture_source_url=body.url if (pdf_name or screen_name) else None,
     )
     db.add(r)
@@ -271,7 +296,24 @@ def update_recipe(recipe_id: str, body: RecipeUpdate, db: Session = Depends(get_
     return r.to_dict()
 
 
-@app.delete("/api/recipes/{recipe_id}")
+@app.get("/api/recipes/{recipe_id}/scale")
+def scale_recipe(recipe_id: str, factor: float = 1.0,
+                 db: Session = Depends(get_db),
+                 _: bool = Depends(require_auth)):
+    """Return the recipe's ingredients scaled by `factor` (0.25, 0.5, 2, ...).
+
+    Pure arithmetic — no LLM, no DB write. The stored recipe is never
+    modified; scaling is a view over it.
+    """
+    if not 0 < factor <= 20:
+        raise HTTPException(400, "מקדם לא תקין")
+    r = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not r:
+        raise HTTPException(404, "מתכון לא נמצא")
+    return scale_ingredients(r.ingredients or "", factor).to_dict()
+
+
+
 def delete_recipe(recipe_id: str, db: Session = Depends(get_db),
                   _: bool = Depends(require_auth)):
     r = db.query(Recipe).filter(Recipe.id == recipe_id).first()
@@ -482,7 +524,7 @@ async def upload_pdf(
 
     r.pdf_filename = fname
     from datetime import datetime
-    r.captured_at = datetime.utcnow()
+    r.captured_at = datetime.now(UTC)
     db.commit()
     db.refresh(r)
     return r.to_dict()
@@ -536,7 +578,7 @@ async def recapture(recipe_id: str, db: Session = Depends(get_db),
         r.screenshot_filename = "page.jpg"
 
     from datetime import datetime
-    r.captured_at = datetime.utcnow()
+    r.captured_at = datetime.now(UTC)
     r.capture_source_url = r.url
     db.commit()
     db.refresh(r)
@@ -567,6 +609,115 @@ def delete_capture(recipe_id: str, db: Session = Depends(get_db),
     return r.to_dict()
 
 
+@app.post("/api/ingredients/analyze")
+def analyze_ingredients_endpoint(body: IngredientAnalyzeRequest,
+                                 _: bool = Depends(require_auth)):
+    """Inspect an ingredient list before saving.
+
+    Powers the review step in the add/refresh flow: reports which lines can be
+    scaled, which need the user to decide, and which can be converted from
+    cups to grams. Pure arithmetic — no LLM, no DB access.
+    """
+    return analyze_ingredients(body.ingredients or "")
+
+
+@app.post("/api/ingredients/convert")
+def convert_ingredients_endpoint(body: IngredientConvertRequest,
+                                 _: bool = Depends(require_auth)):
+    """Rewrite volume measurements as grams where the ingredient is known."""
+    return {
+        "ingredients": apply_gram_conversion(body.ingredients or "",
+                                             body.indices),
+    }
+
+
+
+async def batch_translate(
+    body: dict | None = None,
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_auth),
+):
+    """Find recipes that aren't in Hebrew and translate them in place.
+
+    Pass {"dry_run": true} to see what *would* be translated without writing
+    anything — worth doing first, since this rewrites stored recipe text.
+    """
+    import logging
+    if body is None:
+        body = {}
+    logger = logging.getLogger("batch_translate")
+
+    providers = body.get("providers", ["anthropic", "openai", "xai", "gemini", "groq", "openrouter", "ollama"])
+    dry_run = bool(body.get("dry_run", False))
+    threshold = float(body.get("threshold", 0.5))
+
+    candidates = []
+    for r in db.query(Recipe).all():
+        body_text = f"{r.ingredients or ''}\n{r.instructions or ''}"
+        if not body_text.strip():
+            continue  # nothing to translate
+        ratio = hebrew_ratio(body_text)
+        if ratio < threshold:
+            candidates.append((r, ratio))
+
+    results = {
+        "total": len(candidates),
+        "translated": 0,
+        "failed": 0,
+        "dry_run": dry_run,
+        "details": [],
+    }
+
+    for recipe, ratio in candidates:
+        entry = {"id": recipe.id, "title": recipe.title,
+                 "hebrew_ratio": round(ratio, 2)}
+        if dry_run:
+            entry["status"] = "would translate"
+            results["details"].append(entry)
+            continue
+
+        try:
+            current = ExtractedRecipe(
+                title=recipe.title or "",
+                category=recipe.category or "other",
+                ingredients=recipe.ingredients or "",
+                instructions=recipe.instructions or "",
+                notes=recipe.notes or "",
+            )
+            translated = await translate_to_hebrew(current, providers)
+
+            # translate_to_hebrew returns the original when every provider
+            # fails; don't record that as a success.
+            if not is_hebrew(translated):
+                results["failed"] += 1
+                entry["status"] = "translation failed"
+                results["details"].append(entry)
+                continue
+
+            recipe.title = translated.title or recipe.title
+            recipe.ingredients = translated.ingredients
+            recipe.instructions = translated.instructions
+            recipe.notes = translated.notes or recipe.notes
+            db.commit()
+
+            results["translated"] += 1
+            entry["status"] = "translated"
+            results["details"].append(entry)
+            logger.info("batch_translate: translated %r", recipe.title)
+
+        except Exception as e:
+            db.rollback()
+            results["failed"] += 1
+            entry["status"] = "error"
+            entry["error"] = str(e)
+            results["details"].append(entry)
+            logger.exception("batch_translate: exception for %r", recipe.title)
+
+        await asyncio.sleep(1)  # be kind to free-tier rate limits
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # BATCH EXTRACT — fill in empty recipes using their saved screenshots
 # ---------------------------------------------------------------------------
@@ -585,7 +736,7 @@ async def batch_extract(
         body = {}
     logger = logging.getLogger("batch_extract")
 
-    providers = body.get("providers", ["anthropic", "openai", "xai", "gemini", "groq", "openrouter"])
+    providers = body.get("providers", ["anthropic", "openai", "xai", "gemini", "groq", "openrouter", "ollama"])
     mode = body.get("mode", "fallback")
     use_fallback = mode == "fallback"
 
@@ -656,21 +807,42 @@ async def batch_extract(
 # ---------------------------------------------------------------------------
 
 async def _apply_cleanup(results: list, providers: list[str]) -> list:
-    """If settings.hebrew_cleanup, run cleanup pass on the first successful result."""
-    if not settings.hebrew_cleanup:
-        return results
+    """Post-process the first successful extraction:
+      1. translate into Hebrew if the recipe came back in another language
+      2. run the Hebrew text-quality cleanup pass
+
+    Order matters — cleanup is tuned for Hebrew, so it has to see Hebrew.
+    """
+    import logging
+    logger = logging.getLogger("llm")
+    from schemas import ProviderResult
+
     for i, r in enumerate(results):
-        if r.success and r.data:
-            import logging
-            logging.getLogger("llm").info("Running Hebrew cleanup pass via %s", providers)
-            cleaned = await cleanup_hebrew(r.data, providers)
-            from schemas import ProviderResult
-            results[i] = ProviderResult(
-                provider=r.provider, success=True,
-                data=cleaned, elapsed_ms=r.elapsed_ms,
-            )
-            break
+        if not (r.success and r.data):
+            continue
+
+        data = r.data
+
+        # 1. Hebrew enforcement
+        data, was_translated = await ensure_hebrew(data, providers)
+        if was_translated:
+            logger.info("Recipe translated into Hebrew")
+
+        # 2. Hebrew quality cleanup. Skipped right after a translation —
+        # the translating model already produced clean Hebrew, and a second
+        # pass is just another chance to mangle it.
+        if settings.hebrew_cleanup and not was_translated:
+            logger.info("Running Hebrew cleanup pass via %s", providers)
+            data = await cleanup_hebrew(data, providers)
+
+        results[i] = ProviderResult(
+            provider=r.provider, success=True,
+            data=data, elapsed_ms=r.elapsed_ms,
+        )
+        break
     return results
+
+
 @app.post("/api/extract", response_model=ExtractResponse)
 async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
     # Always capture if requested. Even on partial failure we try to return what we have.
@@ -735,7 +907,7 @@ async def extract(req: ExtractRequest, _: bool = Depends(require_auth)):
 @app.post("/api/extract/file", response_model=ExtractResponse)
 async def extract_from_file(
     file: UploadFile = File(...),
-    providers: str = Form(default='["gemini","groq","ollama","openai","anthropic"]'),
+    providers: str = Form(default='["anthropic", "openai", "xai", "gemini", "groq", "openrouter", "ollama"]'),
     mode: str = Form(default="fallback"),
     _: bool = Depends(require_auth),
 ):

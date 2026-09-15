@@ -36,11 +36,24 @@ class LoginRequest(BaseModel):
     password: str
 
 
+# --- ingredient review / conversion ----------------------------------------
+
+class IngredientAnalyzeRequest(BaseModel):
+    ingredients: str = ""
+
+
+class IngredientConvertRequest(BaseModel):
+    ingredients: str = ""
+    # Restrict conversion to these line indices. None = convert everything
+    # that can be converted.
+    indices: list[int] | None = None
+
+
 # --- extraction ------------------------------------------------------------
 
 class ExtractRequest(BaseModel):
     url: str
-    providers: list[str] = Field(default_factory=lambda: ["anthropic", "openai", "xai", "gemini", "groq", "openrouter"])
+    providers: list[str] = Field(default_factory=lambda: ["anthropic", "openai", "xai", "gemini", "groq", "openrouter", "ollama"])
     mode: str = "fallback"   # "fallback" = sequential, stop at first success | "parallel" = all at once
     capture: bool = True
 

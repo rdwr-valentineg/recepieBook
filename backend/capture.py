@@ -207,6 +207,11 @@ async def capture_url(url: str) -> CaptureResult:
         from scraper import clean_html_to_text
         _, text_preview = clean_html_to_text(html)
         if len(text_preview.strip()) < 500:
+            # Each attempt navigates the page. If none of them beats the
+            # original we must navigate BACK before capturing, otherwise the
+            # screenshot and PDF would show the last (usually 404) print URL
+            # while `html` still holds the original page.
+            improved = False
             for print_url in [url.rstrip('/') + '/print', url + ('&' if '?' in url else '?') + 'print=1']:
                 try:
                     await _load_page(page, print_url)
@@ -215,7 +220,14 @@ async def capture_url(url: str) -> CaptureResult:
                     if len(candidate_text.strip()) > len(text_preview.strip()):
                         html = candidate_html
                         final_url = page.url
+                        improved = True
                         break
+                except Exception:
+                    pass
+            if not improved and page.url != final_url:
+                try:
+                    await _load_page(page, final_url)
+                    html = await page.content()
                 except Exception:
                     pass
 

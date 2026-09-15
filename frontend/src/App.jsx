@@ -1371,16 +1371,200 @@ function RecipeForm({ initial, categories, title, onCancel, onSave, extraPanel }
   );
 }
 
+// ---------------------------------------------------------------------------
+// Ingredient review — shown between extraction and saving
+// ---------------------------------------------------------------------------
+
+function IngredientReview({ analysis, onBack, onConfirm, busy }) {
+  // choice[index] = option id; manual[index] = free text the user typed
+  const [choice, setChoice] = useState({});
+  const [manual, setManual] = useState({});
+  // Lines the user wants converted to grams. Defaults to none — converting
+  // is opt-in, since plenty of people prefer cups.
+  const [toGrams, setToGrams] = useState(new Set());
+
+  const reviewLines = analysis.lines.filter(l => l.needs_review);
+  const convertible = analysis.lines.filter(l => l.convertible_to_grams);
+
+  const toggleGram = (index) => setToGrams(prev => {
+    const next = new Set(prev);
+    next.has(index) ? next.delete(index) : next.add(index);
+    return next;
+  });
+
+  const allGrams = convertible.length > 0 && convertible.every(l => toGrams.has(l.index));
+  const toggleAllGrams = () =>
+    setToGrams(allGrams ? new Set() : new Set(convertible.map(l => l.index)));
+
+  // Assemble the final text: apply each choice, then gram conversion.
+  const build = () => analysis.lines.map(line => {
+    if (toGrams.has(line.index) && line.grams_preview) return line.grams_preview;
+    const picked = choice[line.index];
+    if (!picked) return line.original;
+    const option = (line.options || []).find(o => o.id === picked);
+    if (!option) return line.original;
+    if (option.needs_input) {
+      const text = (manual[line.index] || '').trim();
+      return text ? text : line.original;
+    }
+    return option.value ?? line.original;
+  }).join('\n');
+
+  return (
+    <div className="p-5 sm:p-7 space-y-5">
+      <div>
+        <h3 className="font-display text-lg font-bold mb-1">בדיקת רכיבים</h3>
+        <p className="text-sm text-ink/60 leading-relaxed">
+          {reviewLines.length > 0
+            ? 'כמה שורות לא ניתנות לחישוב אוטומטי. אפשר לבחור מה לעשות איתן, או להשאיר אותן כמו שהן.'
+            : 'כל הרכיבים נקראו בהצלחה.'}
+        </p>
+      </div>
+
+      {/* Lines needing a decision */}
+      {reviewLines.length > 0 && (
+        <div className="space-y-3">
+          {reviewLines.map(line => (
+            <div key={line.index}
+                 className="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <span className="text-[15px] text-ink/90">{line.original.trim()}</span>
+                <span className="text-xs text-amber-800 shrink-0 mt-0.5">
+                  ⚠ {line.reason}
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {(line.options || []).map(opt => (
+                  <label key={opt.id}
+                         className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name={`opt-${line.index}`}
+                      checked={(choice[line.index] || 'as_is') === opt.id}
+                      onChange={() => setChoice({ ...choice, [line.index]: opt.id })}
+                      className="accent-terracotta"
+                    />
+                    <span className="text-ink/80">{opt.label}</span>
+                  </label>
+                ))}
+                {choice[line.index] &&
+                 (line.options || []).find(o => o.id === choice[line.index])?.needs_input && (
+                  <input
+                    type="text"
+                    value={manual[line.index] || ''}
+                    onChange={e => setManual({ ...manual, [line.index]: e.target.value })}
+                    placeholder="למשל: • 2 כפות פטרוזיליה קצוצה"
+                    className="w-full mt-1 px-3 py-2 bg-white border border-ink/15 rounded-lg text-sm focus:outline-none focus:border-terracotta"
+                  />
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Cup → gram conversion */}
+      {convertible.length > 0 && (
+        <div className="border border-ink/10 rounded-xl p-3.5 bg-white">
+          <label className="flex items-center gap-2 cursor-pointer mb-1">
+            <input
+              type="checkbox"
+              checked={allGrams}
+              onChange={toggleAllGrams}
+              className="accent-terracotta"
+            />
+            <span className="font-medium text-[15px]">המרת כוסות לגרמים</span>
+          </label>
+          <p className="text-xs text-ink/55 mb-3 leading-relaxed">
+            שקילה מדויקת יותר ממדידה בכוסות. ההמרה אפשרית רק לרכיבים מוכרים —
+            השאר יישארו כפי שהם.
+          </p>
+          <div className="space-y-1.5">
+            {convertible.map(line => (
+              <label key={line.index}
+                     className="flex items-start gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={toGrams.has(line.index)}
+                  onChange={() => toggleGram(line.index)}
+                  className="accent-terracotta mt-1"
+                />
+                <span className="text-ink/80">
+                  {line.original.trim()}
+                  <span className="text-ink/40 mx-1.5">←</span>
+                  <span className="text-terracotta">{line.grams_preview.trim()}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="sticky bottom-0 -mx-5 sm:-mx-7 px-5 sm:px-7 py-3 bg-cream border-t border-ink/10 flex gap-2">
+        <button
+          onClick={onBack}
+          disabled={busy}
+          className="px-4 py-3 rounded-xl text-sm text-ink/70 hover:bg-ink/[0.06] transition disabled:opacity-40"
+        >
+          חזרה לעריכה
+        </button>
+        <button
+          onClick={() => onConfirm(build())}
+          disabled={busy}
+          className="flex-1 bg-terracotta hover:bg-terracotta-dark disabled:opacity-40 text-white py-3 rounded-xl font-medium transition flex items-center justify-center gap-2"
+        >
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+          שמירה
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function RecipeFormInner({ initial, categories, onSave }) {
   const [form, setForm] = useState(initial);
   const [busy, setBusy] = useState(false);
+  const [analysis, setAnalysis] = useState(null);   // non-null = review screen
+
+  const save = async (values) => {
+    setBusy(true);
+    await onSave(values);
+    setBusy(false);
+  };
 
   const submit = async () => {
     if (!form.title.trim()) { alert('יש לכתוב שם למתכון'); return; }
+    if (!form.ingredients?.trim()) { await save(form); return; }
+
     setBusy(true);
-    await onSave(form);
-    setBusy(false);
+    try {
+      const result = await api.analyzeIngredients(form.ingredients);
+      // Nothing to decide and nothing to convert — don't make them click
+      // through an empty review screen.
+      if (result.review_count === 0 && result.convertible_count === 0) {
+        setBusy(false);
+        await save(form);
+        return;
+      }
+      setAnalysis(result);
+      setBusy(false);
+    } catch (_) {
+      // Review is a convenience, not a gate. If analysis fails, save anyway.
+      setBusy(false);
+      await save(form);
+    }
   };
+
+  if (analysis) {
+    return (
+      <IngredientReview
+        analysis={analysis}
+        busy={busy}
+        onBack={() => setAnalysis(null)}
+        onConfirm={(ingredients) => save({ ...form, ingredients })}
+      />
+    );
+  }
 
   return (
     <div className="p-5 sm:p-7 space-y-5">
@@ -1784,6 +1968,114 @@ function SectionedText({ text, className = '' }) {
   );
 }
 
+const SCALE_OPTIONS = [
+  { factor: 0.25, label: '¼' },
+  { factor: 0.5, label: '½' },
+  { factor: 1, label: '1×' },
+  { factor: 2, label: '2×' },
+  { factor: 3, label: '3×' },
+];
+
+function IngredientsSection({ recipe, showToast }) {
+  const [factor, setFactor] = useState(1);
+  const [scaled, setScaled] = useState(null);   // {lines, review_count} | null
+  const [loading, setLoading] = useState(false);
+
+  // Reset scaling when switching to a different recipe.
+  useEffect(() => {
+    setFactor(1);
+    setScaled(null);
+  }, [recipe.id]);
+
+  const pick = async (next) => {
+    setFactor(next);
+    if (next === 1) { setScaled(null); return; }
+    setLoading(true);
+    try {
+      setScaled(await api.scaleRecipe(recipe.id, next));
+    } catch (e) {
+      showToast?.(`שגיאה: ${e.message}`);
+      setFactor(1);
+      setScaled(null);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <section className="mb-7">
+      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+        <h2 className="font-display text-xl font-bold flex items-center gap-2">
+          <span className="text-terracotta">📝</span> רכיבים
+        </h2>
+        <div className="no-print flex items-center gap-1 bg-ink/[0.05] rounded-full p-0.5">
+          {SCALE_OPTIONS.map(opt => (
+            <button
+              key={opt.factor}
+              onClick={() => pick(opt.factor)}
+              disabled={loading}
+              className={`px-2.5 py-1 rounded-full text-sm transition disabled:opacity-50 ${
+                factor === opt.factor
+                  ? 'bg-terracotta text-white shadow-sm'
+                  : 'text-ink/70 hover:bg-ink/[0.06]'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-ink/50 py-3">
+          <Loader2 size={14} className="animate-spin" /> מחשב כמויות…
+        </div>
+      ) : scaled ? (
+        <>
+          <div className="space-y-0.5">
+            {scaled.lines.map((line, i) => {
+              const t = line.scaled.trim();
+              if (!t) return <div key={i} className="h-2" />;
+              if (line.is_section) {
+                return (
+                  <div key={i} className="font-bold text-[15px] text-ink pt-3 first:pt-0">
+                    {t}
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={i}
+                  className={`text-[15px] leading-[1.85] ${
+                    line.needs_review
+                      ? 'text-ink/90 bg-amber-50 border-r-2 border-amber-400 ps-2 rounded-l'
+                      : 'text-ink/90'
+                  }`}
+                >
+                  {t}
+                  {line.needs_review && (
+                    <span className="text-xs text-amber-700 me-2">
+                      ⚠ {line.review_reason || 'בדקי ידנית'}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {scaled.review_count > 0 && (
+            <p className="no-print text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2.5 mt-3">
+              {scaled.review_count === 1
+                ? 'שורה אחת סומנה — לא הצלחתי לחשב אותה אוטומטית, הכמות המקורית נשמרה.'
+                : `${scaled.review_count} שורות סומנו — לא הצלחתי לחשב אותן אוטומטית, הכמויות המקוריות נשמרו.`}
+            </p>
+          )}
+        </>
+      ) : (
+        <SectionedText text={recipe.ingredients} />
+      )}
+    </section>
+  );
+}
+
 function StructuredView({ recipe, category, onUpdate, showToast, askConfirm }) {
   const stepImgRef = useRef(null);
   const [uploadingStep, setUploadingStep] = useState(false);
@@ -1848,12 +2140,7 @@ function StructuredView({ recipe, category, onUpdate, showToast, askConfirm }) {
       )}
 
       {recipe.ingredients?.trim() && (
-        <section className="mb-7">
-          <h2 className="font-display text-xl font-bold mb-3 flex items-center gap-2">
-            <span className="text-terracotta">📝</span> רכיבים
-          </h2>
-          <SectionedText text={recipe.ingredients} />
-        </section>
+        <IngredientsSection recipe={recipe} showToast={showToast} />
       )}
 
       {recipe.instructions?.trim() && (

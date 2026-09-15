@@ -2,7 +2,7 @@
 import os
 import secrets
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 
 from config import settings
 from sqlalchemy import Column, DateTime, String, Text, create_engine, func
@@ -53,7 +53,7 @@ class Recipe(Base):
     added_by = Column(String(100), nullable=False, default="")
     share_token = Column(String(80), nullable=True, unique=True, index=True)
     date = Column(String(20), nullable=False,
-                  default=lambda: datetime.utcnow().strftime("%Y-%m-%d"))
+                  default=lambda: datetime.now(UTC).strftime("%Y-%m-%d"))
 
     step_images = Column(Text, nullable=True, default="[]")  # JSON: [{filename, caption}]
 

@@ -153,7 +153,18 @@ def _enabled_providers() -> list[Provider]:
                 text_model=text_model,
                 vision_model=vision_model,
             ))
+    # Ollama — local, last resort, no internet needed. OpenAI-compatible API,
+    # but it takes no API key (httpx still needs a non-empty Authorization
+    # header value, so we send a placeholder).
+    if settings.ollama_base_url:
+        ps.append(Provider(id="ollama", name="Ollama (מקומי)",
+            base_url=settings.ollama_base_url.rstrip("/"),
+            api_key="ollama",
+            text_model=settings.ollama_model,
+            vision_model=settings.ollama_vision_model))
     return ps
+
+
 def _provider_by_id(pid: str) -> Provider | None:
     for p in _enabled_providers():
         if p.id == pid:
@@ -169,6 +180,7 @@ def list_providers() -> list[ProviderInfo]:
         ("gemini",      "Gemini (Google)",             settings.gemini_model,           bool(settings.gemini_api_key)),
         ("groq",        "Groq",                        settings.groq_model,             bool(settings.groq_api_key)),
         ("openrouter",  "OpenRouter — fallback (auto model)",  "multiple :free models",  bool(settings.openrouter_api_key)),
+        ("ollama",      "Ollama (מקומי)",              settings.ollama_model,           bool(settings.ollama_base_url)),
     ]
     return [ProviderInfo(id=i, name=n, model=m, enabled=e) for i, n, m, e in all_defs]
 
@@ -496,3 +508,142 @@ async def cleanup_hebrew(data: ExtractedRecipe, providers: list[str]) -> Extract
             continue  # try next provider
 
     return data  # return original if all providers fail
+
+
+# ---------------------------------------------------------------------------
+# Hebrew enforcement — translate non-Hebrew recipes into Hebrew
+# ---------------------------------------------------------------------------
+
+_HEBREW_RE = re.compile(r"[\u0590-\u05FF]")
+# Letters in any script — the denominator for the Hebrew ratio. Digits,
+# punctuation and whitespace are script-neutral and would skew the result
+# (an ingredient list is mostly numbers).
+_LETTER_RE = re.compile(r"[^\W\d_]", re.UNICODE)
+
+
+def hebrew_ratio(text: str) -> float:
+    """Fraction of the letters in `text` that are Hebrew. 0.0 for no letters."""
+    letters = _LETTER_RE.findall(text or "")
+    if not letters:
+        return 0.0
+    hebrew = sum(1 for c in letters if _HEBREW_RE.match(c))
+    return hebrew / len(letters)
+
+
+def is_hebrew(data: ExtractedRecipe, threshold: float = 0.5) -> bool:
+    """Is this recipe already in Hebrew?
+
+    Judged on the body (ingredients + instructions) rather than the title —
+    a Hebrew recipe often keeps an English or French dish name, and a recipe
+    is not 'in English' because it's called 'Crème Brûlée'.
+    """
+    body = f"{data.ingredients}\n{data.instructions}"
+    return hebrew_ratio(body) >= threshold
+
+
+TRANSLATE_PROMPT = """Translate this recipe into Hebrew. It is for an \
+Israeli home cook.
+
+Rules:
+- Translate title, ingredients, instructions and notes into natural, \
+idiomatic Hebrew — the way an Israeli recipe would actually be written.
+- Keep the SAME JSON structure and the same field names.
+- Keep "category" exactly as-is — do not translate it, it is an internal id.
+- Keep all numbers, quantities and units as they are. Convert unit NAMES to \
+Hebrew (cup→כוס, tablespoon→כף, teaspoon→כפית, gram→גרם, ounce→אונקיה) but \
+do NOT convert the values between measurement systems.
+- Keep the section-header structure (lines ending with ':') and the '• ' \
+ingredient prefixes.
+- Do not add, remove, or reinterpret any ingredient or step.
+- Leave brand names and proper nouns in their original form if they have no \
+common Hebrew form.
+- Return ONLY valid JSON, no markdown fences.
+
+Input:
+{json}
+
+Return the translated JSON:"""
+
+
+async def _call_provider_json(p: Provider, prompt: str, max_tokens: int = 3000) -> str:
+    """Single text completion against one provider. Returns the raw string."""
+    if p.is_anthropic:
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": p.api_key, "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"},
+                json={"model": p.text_model, "max_tokens": max_tokens,
+                      "messages": [{"role": "user", "content": prompt}]},
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            return "".join(b.get("text", "") for b in payload.get("content", [])
+                           if b.get("type") == "text")
+
+    async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+        resp = await client.post(
+            f"{p.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {p.api_key}",
+                     "Content-Type": "application/json"},
+            json={"model": p.text_model,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0.1},
+        )
+        resp.raise_for_status()
+        msg = resp.json()["choices"][0]["message"]
+        return msg.get("content") or msg.get("reasoning") or ""
+
+
+async def translate_to_hebrew(data: ExtractedRecipe,
+                              providers: list[str]) -> ExtractedRecipe:
+    """Translate a recipe into Hebrew. Returns the original on total failure —
+    a recipe in the wrong language beats no recipe at all."""
+    import json as _json
+    import logging
+    logger = logging.getLogger("llm")
+
+    payload = {
+        "title": data.title,
+        "category": data.category,
+        "ingredients": data.ingredients,
+        "instructions": data.instructions,
+        "notes": data.notes,
+    }
+    prompt = TRANSLATE_PROMPT.format(
+        json=_json.dumps(payload, ensure_ascii=False, indent=2))
+
+    for pid in _expand_providers(providers):
+        p = _provider_by_id(pid)
+        if p is None:
+            continue
+        try:
+            raw = await _call_provider_json(p, prompt)
+            if not raw.strip():
+                continue
+            translated = normalize(parse_json_loose(raw))
+            # Guard against a provider that echoed the input back untranslated
+            # or returned something empty — either way, keep looking.
+            if not translated.ingredients and not translated.instructions:
+                continue
+            if not is_hebrew(translated):
+                logger.warning("translate_to_hebrew: %s returned non-Hebrew output", pid)
+                continue
+            # The model is told to leave category alone; enforce it anyway.
+            translated.category = data.category
+            logger.info("translate_to_hebrew: translated via %s", pid)
+            return translated
+        except Exception as e:
+            logger.warning("translate_to_hebrew: %s failed: %s", pid, e)
+            continue
+
+    logger.warning("translate_to_hebrew: all providers failed, keeping original")
+    return data
+
+
+async def ensure_hebrew(data: ExtractedRecipe,
+                        providers: list[str]) -> tuple[ExtractedRecipe, bool]:
+    """Translate into Hebrew if it isn't already. Returns (recipe, translated)."""
+    if is_hebrew(data):
+        return data, False
+    return await translate_to_hebrew(data, providers), True

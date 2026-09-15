@@ -6,6 +6,10 @@ A self-hosted family recipe book running on your home Kubernetes cluster.
 
 - 📸 **Captures every recipe at add-time** — full-page PDF + screenshot via headless Chromium. Recipe websites die; your copies don't.
 - 🤖 **LLM extraction** (Anthropic + OpenAI in parallel) — used **once** when adding a recipe, never again.
+- ⚖️ **Ingredient scaling** — ¼ / ½ / 2× / 3× buttons recalculate every quantity. Pure arithmetic, no LLM, no API call to anyone. Converts to whatever unit is actually measurable (⅛ כוס → 2 כפות) and flags lines it can't parse instead of guessing.
+- 🔎 **Review step on save** — before a recipe is stored, any ingredient line that can't be scaled automatically is shown with concrete options (pick an end of a range, type a quantity, or just "add as is").
+- ⚱️ **Cups → grams** — optional, per-line, opt-in at save time. Uses a density table of common ingredients; anything not in it is left as written rather than guessed.
+- 🇮🇱 **Hebrew enforcement** — recipes from non-Hebrew sites are translated at add time; `POST /api/recipes/batch-translate` fixes the existing library.
 - 🔍 Full-text search across all fields
 - 🏷️ 12 recipe categories
 - 📤 **Share without account** — generates a tokenized URL (`example.com/share/<token>`) that anyone can open. Login is never exposed externally.
