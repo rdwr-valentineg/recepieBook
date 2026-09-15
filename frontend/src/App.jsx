@@ -158,11 +158,28 @@ function RecipeApp({ onLogout }) {
   const [extractedDraft, setExtractedDraft] = useState(null); // {captureSessionId, extracted, capture, sourceUrl}
   const [editingRecipe, setEditingRecipe] = useState(null);
   const [toast, setToast] = useState(null);
+  const [confirmState, setConfirmState] = useState(null); // {message, resolve}
 
   const showToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
   }, []);
+
+  // Promise-based replacement for window.confirm(). Native confirm() is
+  // silently suppressed (no dialog, immediate falsy return) in a lot of
+  // mobile contexts — in-app browsers (WhatsApp/Instagram), some installed
+  // PWAs, and browsers that throttle repeated dialogs — which looks exactly
+  // like "the button does nothing". This in-app dialog can't be blocked.
+  const askConfirm = useCallback((message) => {
+    return new Promise((resolve) => {
+      setConfirmState({ message, resolve });
+    });
+  }, []);
+
+  const resolveConfirm = (result) => {
+    confirmState?.resolve(result);
+    setConfirmState(null);
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -271,7 +288,7 @@ function RecipeApp({ onLogout }) {
   };
 
   const onDelete = async (id) => {
-    if (!confirm('למחוק את המתכון? אי אפשר לבטל.')) return;
+    if (!(await askConfirm('למחוק את המתכון? אי אפשר לבטל.'))) return;
     try {
       await api.deleteRecipe(id);
       setRecipes(prev => prev.filter(r => r.id !== id));
@@ -405,6 +422,16 @@ function RecipeApp({ onLogout }) {
             navigator.clipboard.writeText(text).then(() => showToast('הועתק! 📋'));
           }}
           showToast={showToast}
+          askConfirm={askConfirm}
+        />
+      )}
+
+      {/* Confirm dialog (in-app replacement for window.confirm) */}
+      {confirmState && (
+        <ConfirmModal
+          message={confirmState.message}
+          onConfirm={() => resolveConfirm(true)}
+          onCancel={() => resolveConfirm(false)}
         />
       )}
 
@@ -552,6 +579,26 @@ function IconBtn({ icon, label, onClick, danger, busy }) {
     >
       {busy ? <Loader2 size={17} className="animate-spin" /> : icon}
     </button>
+  );
+}
+
+function ConfirmModal({ message, onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 bg-ink/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 fade-in">
+      <div className="bg-cream w-full max-w-sm rounded-2xl shadow-2xl p-5 flex flex-col gap-4">
+        <p className="text-ink text-sm leading-relaxed">{message}</p>
+        <div className="flex justify-end gap-2">
+          <button onClick={onCancel}
+            className="px-4 py-2 rounded-full text-sm text-ink/70 hover:bg-ink/[0.06] transition">
+            ביטול
+          </button>
+          <button onClick={onConfirm}
+            className="px-4 py-2 rounded-full text-sm bg-red-600 text-white hover:bg-red-700 transition">
+            מחק
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1432,7 +1479,7 @@ function RecipeFormInner({ initial, categories, onSave }) {
 // RecipeDetail with tabs: structured / pdf / screenshot
 // ---------------------------------------------------------------------------
 
-function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, onShare, showToast }) {
+function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, onShare, showToast, askConfirm }) {
   const [tab, setTab] = useState('structured');
   const [shareMenu, setShareMenu] = useState(false);
   const [shareUrl, setShareUrl] = useState(null);
@@ -1468,7 +1515,7 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
   };
 
   const handleDeleteCapture = async () => {
-    if (!confirm('למחוק את ה-PDF וצילום המסך? (המתכון עצמו נשמר)')) return;
+    if (!(await askConfirm('למחוק את ה-PDF וצילום המסך? (המתכון עצמו נשמר)'))) return;
     try {
       const updated = await api.deleteCapture(recipe.id);
       onUpdate(updated);
@@ -1573,7 +1620,7 @@ function RecipeDetail({ recipe, category, onClose, onEdit, onDelete, onUpdate, o
         {/* Content */}
         <div className="overflow-y-auto flex-1">
           {tab === 'structured' && (
-            <StructuredView recipe={recipe} category={category} onUpdate={onUpdate} showToast={showToast} />
+            <StructuredView recipe={recipe} category={category} onUpdate={onUpdate} showToast={showToast} askConfirm={askConfirm} />
           )}
           {tab === 'inapp' && recipe.url && (
             <InAppBrowser url={recipe.url} pdfUrl={recipe.pdf_url} recipeId={recipe.id} onRecapture={handleRecapture} recapturing={recapturing} onUpdate={onUpdate} showToast={showToast} />
@@ -1737,7 +1784,7 @@ function SectionedText({ text, className = '' }) {
   );
 }
 
-function StructuredView({ recipe, category, onUpdate, showToast }) {
+function StructuredView({ recipe, category, onUpdate, showToast, askConfirm }) {
   const stepImgRef = useRef(null);
   const [uploadingStep, setUploadingStep] = useState(false);
 
@@ -1757,7 +1804,7 @@ function StructuredView({ recipe, category, onUpdate, showToast }) {
   };
 
   const handleDeleteStep = async (index) => {
-    if (!confirm('למחוק את התמונה?')) return;
+    if (!(await askConfirm('למחוק את התמונה?'))) return;
     try {
       const updated = await api.deleteStepImage(recipe.id, index);
       onUpdate?.(updated);
